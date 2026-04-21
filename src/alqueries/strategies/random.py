@@ -12,7 +12,7 @@ class RandomSampling(QueryStrategy):
     def __init__(self, seed: int | None = None):
         self._seed = seed
 
-    def query(self, pool_indices: np.ndarray, n_samples: int, **_) -> np.ndarray:
+    def query(self, unlabeled_indices: np.ndarray, n_samples: int, **_) -> np.ndarray:
         rng = np.random.default_rng(self._seed)
-        n = min(n_samples, len(pool_indices))
-        return rng.choice(pool_indices, size=n, replace=False)
+        n = min(n_samples, len(unlabeled_indices))
+        return rng.choice(unlabeled_indices, size=n, replace=False)

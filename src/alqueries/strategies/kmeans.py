@@ -21,18 +21,19 @@ class KMeansSampling(QueryStrategy):
 
     def query(
         self,
-        pool_indices: np.ndarray,
+        unlabeled_indices: np.ndarray,
         n_samples: int,
         *,
         embeddings: np.ndarray,
         **_,
     ) -> np.ndarray:
         """
-        embeddings: (N, D) feature vectors, row i aligned to pool_indices[i].
+        embeddings: (N, D) feature vectors, row i aligned to unlabeled_indices[i].
         """
         from sklearn.cluster import KMeans
         from sklearn.decomposition import PCA
 
+        embeddings = embeddings[unlabeled_indices]
         if self._pca_dim is not None and embeddings.shape[1] > self._pca_dim:
             embeddings = PCA(n_components=self._pca_dim).fit_transform(embeddings)
         if self._cast_to_float16:
@@ -47,4 +48,4 @@ class KMeansSampling(QueryStrategy):
             np.flatnonzero(cluster_ids == i)[dist[cluster_ids == i].argmin()]
             for i in range(n_samples)
         ])
-        return pool_indices[picked]
+        return unlabeled_indices[picked]

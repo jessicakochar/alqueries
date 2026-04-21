@@ -12,15 +12,16 @@ from alqueries.registry import register_strategy
 class EntropySampling(QueryStrategy):
     def query(
         self,
-        pool_indices: np.ndarray,
+        unlabeled_indices: np.ndarray,
         n_samples: int,
         *,
         probs: torch.Tensor,
         **_,
     ) -> np.ndarray:
         """
-        probs: (N, C) softmax probabilities, row i aligned to pool_indices[i].
+        probs: (N, C) softmax probabilities, row i aligned to unlabeled_indices[i].
         """
+        probs = probs[unlabeled_indices]
         log_probs = torch.log(probs.clamp_min(1e-12))
         uncertainties = (probs * log_probs).sum(1)
-        return pool_indices[uncertainties.sort()[1][:n_samples]]
+        return unlabeled_indices[uncertainties.sort()[1][:n_samples]]

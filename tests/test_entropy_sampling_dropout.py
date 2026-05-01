@@ -1,26 +1,21 @@
 import numpy as np
+import torch
 from alqueries.strategies.entropy_sampling_dropout import EntropySamplingDropout
 
-
-def test_entropy_sampling_dropout():
-    np.random.seed(42)
-
-    T = 5  # Number of stochastic forward passes
-    N = 20  # Number of unlabeled samples
-    C = 3  # Number of classes
-
-    # Simulate softmax probabilities for T forward passes
-    probs = np.random.rand(T, N, C)
-    probs = probs / probs.sum(axis=2, keepdims=True)  # Normalize to
-
-    indices = np.arange(N)
-    n_samples = 5
-
+def test_entropy_sampling_dropout_selects_most_uncertain():
     strategy = EntropySamplingDropout()
-    selected_indices = strategy.query(
-        probs, indices, n_samples
-    )
-    print("Selected indices:", selected_indices)
+    probs = torch.tensor([
+        [[0.90, 0.10], [0.50, 0.50], [0.55, 0.45], [0.95, 0.05]],
+        [[0.90, 0.10], [0.50, 0.50], [0.55, 0.45], [0.95, 0.05]],
+    ], dtype=torch.float32)  # shape: (T=2, N=4, C=2)
 
-    assert len(selected_indices) == n_samples, "Number of selected samples should match n_samples"
-    assert all(idx in indices for idx in selected_indices), "Selected indices should be from the unlabeled indices"
+    unlabeled_indices = np.array([0, 1, 2, 3])
+
+    selected = strategy.query(
+        unlabeled_indices=unlabeled_indices,
+        n_samples=2,
+        probs=probs,
+    )
+
+    assert len(selected) == 2
+    assert set(selected.tolist()) == {1, 2}

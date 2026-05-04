@@ -1,13 +1,32 @@
+
+import numpy as np
 import torch
+from alqueries.base import QueryStrategy
+from alqueries.registry import register_strategy
 
-def bayesian_al_dropout(probs: torch.Tensor, n_query: int) -> torch.Tensor:
 
-    mean_probs = torch.mean(probs, dim=0)
-    entropy_mean = -torch.sum(mean_probs * torch.log(mean_probs + 1e-10), dim=1)
-    entropy_per_sample = -torch.sum(probs * torch.log(probs + 1e-10), dim=2)
-    mean_entropy = torch.mean(entropy_per_sample, dim=0)
+@register_strategy("bayesian_active_learning_disagreement_dropout")
+class BayesianALDropout(QueryStrategy):
 
-    score = entropy_mean - mean_entropy
-    query_indices = torch.argsort(score, descending=True)
+    def query(
+        self,
+        unlabeled_indices: np.ndarray,
+        n_samples: int,
+        *,
+        probs: torch.Tensor,
+        **_,
+    ) -> np.ndarray:
+        epsilon = 1e-10
 
-    return query_indices[:n_query]
+        pool_probs = probs[:, unlabeled_indices, :]        # (T, M, C)
+
+        mean_probs = pool_probs.mean(dim=0)                # (M, C)
+        H_mean = -(mean_probs * (mean_probs + epsilon).log()).sum(dim=1)  # (M,)
+
+        H_each = -(pool_probs * (pool_probs + epsilon).log()).sum(dim=2)  # (T, M)
+        mean_H = H_each.mean(dim=0)                        # (M,)
+
+        bald_scores = H_mean - mean_H                      # (M,)
+
+        # Step 5 — highest BALD score = most informative to query.
+        return unlabeled_indices[bald_scores.argsort(descending=True)[:n_samples]]

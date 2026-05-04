@@ -1,20 +1,27 @@
+# tests/test_margin_sampling.py
+import numpy as np
 import torch
+from alqueries import get_strategy
 
-def test_margin_sampling():
-    from alqueries.strategies.margin_sampling import margin_sampling
 
-    # Sample probabilities for 5 samples and 3 classes
+def test_margin_sampling_selects_smallest_margin():
+    strategy = get_strategy("margin_sampling")
+
     probs = torch.tensor([
-        [0.7, 0.2, 0.1],  # margin = 0.5
-        [0.4, 0.35, 0.25], # margin = 0.05 (most uncertain)
-        [0.6, 0.3, 0.1],  # margin = 0.3
-        [0.5, 0.45, 0.05], # margin = 0.05 (most uncertain)
-        [0.8, 0.15, 0.05] # margin = 0.65 (least uncertain)
+        [0.70, 0.20, 0.10],
+        [0.40, 0.35, 0.25],
+        [0.60, 0.30, 0.10],
+        [0.50, 0.45, 0.05],
+        [0.80, 0.15, 0.05],
     ], dtype=torch.float32)
 
-    n_query = 2
-    selected_indices = margin_sampling(probs, n_query)
+    unlabeled_indices = np.array([0, 1, 2, 3, 4])
 
-    assert len(selected_indices) == n_query, "Should select the correct number of samples"
-    assert set(selected_indices.tolist()) == {1, 3}, "Should select the most uncertain samples"
-    print("Test passed: margin_sampling returns valid indices.")
+    selected = strategy.query(
+        unlabeled_indices=unlabeled_indices,
+        n_samples=2,
+        probs=probs,
+    )
+
+    assert len(selected) == 2
+    assert set(selected.tolist()) == {1, 3}  # the two smallest margins

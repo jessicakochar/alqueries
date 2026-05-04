@@ -3,19 +3,19 @@ import torch
 from alqueries import get_strategy
 
 
-def test_mean_std_selects_highest_std_across_passes():
-    strategy = get_strategy("mean_std")
+def test_var_ratio_selects_highest_disagreement():
+    strategy = get_strategy("var_ratio")
 
     probs = torch.tensor([
         # T=0
         [[0.90, 0.10],
-         [0.95, 0.05],
-         [0.70, 0.30],
-         [0.85, 0.15]],
+         [0.80, 0.20],
+         [0.75, 0.25],
+         [0.95, 0.05]],
         # T=1
         [[0.90, 0.10],
-         [0.05, 0.95],
-         [0.30, 0.70],
+         [0.10, 0.90],
+         [0.20, 0.80],
          [0.85, 0.15]],
     ], dtype=torch.float32)
 
@@ -28,4 +28,4 @@ def test_mean_std_selects_highest_std_across_passes():
     )
 
     assert len(selected) == 2
-    assert set(selected.tolist()) == {1, 2}
+    assert set(selected.tolist()) == {1, 2}  # highest variation ratio

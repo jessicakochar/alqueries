@@ -1,9 +1,22 @@
+import numpy as np
 import torch
+from alqueries.base import QueryStrategy
+from alqueries.registry import register_strategy
 
-def mean_std(probs: torch.Tensor, n_query: int) -> torch.Tensor:
 
-    var_probs = torch.var(probs, dim=0)
-    uncertainties = torch.sum(var_probs, dim=1 )
-    query_indices = torch.argsort(uncertainties, descending=True)
+@register_strategy("mean_std")
+class MeanStd(QueryStrategy):
 
-    return query_indices[: n_query]
+    def query(
+        self,
+        unlabeled_indices: np.ndarray,
+        n_samples: int,
+        *,
+        probs: torch.Tensor,
+        **_,
+    ) -> np.ndarray:
+        pool_probs = probs[:, unlabeled_indices, :]       # (T, M, C)
+        std_probs = torch.std(pool_probs, dim=0)          # (M, C)
+        scores = std_probs.sum(dim=1)
+                        # (M,)
+        return unlabeled_indices[scores.argsort(descending=True)[:n_samples]]

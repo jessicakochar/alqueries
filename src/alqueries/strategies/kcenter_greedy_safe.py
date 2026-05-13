@@ -1,58 +1,35 @@
 import numpy as np
 import torch
+
 from alqueries.base import QueryStrategy
 from alqueries.registry import register_strategy
 
 
-@register_strategy("kcenter_greedy_safe")
-class kcenter_greedy_safe(QueryStrategy):
-
+@register_strategy("kcenter_greedy")
+class KCenterGreedy(QueryStrategy):
     def query(
         self,
         unlabeled_indices: np.ndarray,
         n_samples: int,
         *,
         embeddings: torch.Tensor,
-        labeled_mask: np.ndarray,
+        labeled_indices: np.ndarray,
         **_,
     ) -> np.ndarray:
-        # Work with a boolean tensor on the same device as embeddings.
-        labelled_mask = torch.tensor(labeled_mask, dtype=torch.bool,
-                                     device=embeddings.device)
-        labelled_indices   = torch.where(labelled_mask)[0]
-        unlabelled_indices = torch.where(~labelled_mask)[0]
-
-        num = embeddings.shape[0]
-        min_distances = torch.full((num,), float("inf"), device=embeddings.device)
-
-        # Step 1 — initialise min_distances from existing labelled points.
-        if len(labelled_indices) > 0:
-            for idx in labelled_indices:
-                dist = torch.norm(embeddings - embeddings[idx], dim=1)
-                min_distances = torch.minimum(min_distances, dist)
-        else:
-            # Cold-start: no labelled points yet — seed from the first
-            # unlabelled point so greedy selection has somewhere to start.
-            first_idx = unlabelled_indices[0]
-            min_distances = torch.norm(embeddings - embeddings[first_idx], dim=1)
-
-        # Step 2 — greedily pick the furthest unlabelled point each step.
-        selected = []
-        for _ in range(n_samples):
-            # Restrict to the current unlabelled pool.
-            pool_distances = min_distances[unlabelled_indices]
-            chosen_pos     = torch.argmax(pool_distances)
-            chosen_idx     = unlabelled_indices[chosen_pos]
-            selected.append(chosen_idx.item())
-
-            # Update min_distances to account for the newly selected center.
-            new_dist   = torch.norm(embeddings - embeddings[chosen_idx], dim=1)
-            min_distances = torch.minimum(min_distances, new_dist)
-
-            # Remove chosen_idx from the pool for the next iteration.
-            keep = torch.ones(len(unlabelled_indices), dtype=torch.bool,
-                              device=embeddings.device)
-            keep[chosen_pos] = False
-            unlabelled_indices = unlabelled_indices[keep]
-
-        return np.array(selected, dtype=np.int64)
+        if not torch.is_tensor(embeddings):
+            embeddings = torch.as_tensor(embeddings)
+        unlabeled_embeddings = embeddings[unlabeled_indices]
+        labeled_embeddings = embeddings[labeled_indices]
+        if len(labeled_embeddings) == 0:
+            return unlabeled_indices[: min(n_samples, len(unlabeled_indices))]
+        distances = torch.cdist(unlabeled_embeddings, labeled_embeddings)
+        min_distances = distances.min(dim=1).values
+        selected: list[int] = []
+        for _ in range(min(n_samples, len(unlabeled_indices))):
+            farthest_idx = torch.argmax(min_distances).item()
+            selected.append(farthest_idx)
+            new_center = unlabeled_embeddings[farthest_idx].unsqueeze(0)
+            new_distances = torch.cdist(unlabeled_embeddings, new_center).squeeze(1)
+            min_distances = torch.minimum(min_distances, new_distances)
+            min_distances[farthest_idx] = -torch.inf
+        return np.asarray(unlabeled_indices[selected])

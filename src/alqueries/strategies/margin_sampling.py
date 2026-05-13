@@ -6,13 +6,18 @@ from alqueries.registry import register_strategy
 
 @register_strategy("margin_sampling")
 class MarginSampling(QueryStrategy):
-        def query(self, unlabeled_indices: np.ndarray,n_samples: int, *,probs: torch.Tensor, **_, ) -> np.ndarray:
-
-            pool_probs = probs[unlabeled_indices]
-            top2_probs, _ = torch.topk(probs, k=2, dim=1)
-            margins = top2_probs[:, 0] - top2_probs[:, 1]
-
-            return unlabeled_indices[margins.argsort()[:n_samples]]
+    def query(
+        self,
+        unlabeled_indices: np.ndarray,
+        n_samples: int,
+        *,
+        probs: torch.Tensor,
+        **_,
+    ) -> np.ndarray:
+        pool_probs = probs[unlabeled_indices]
+        top2_probs, _ = torch.topk(pool_probs, k=2, dim=1)
+        margins = top2_probs[:, 0] - top2_probs[:, 1]
+        return unlabeled_indices[margins.argsort()[:n_samples]]
 
 
 

@@ -49,3 +49,32 @@ def test_query_engine_without_extractor_still_passes_split_metadata():
 
     picked = engine.query(UsesOnlySplit(), n_samples=2)
     assert picked.tolist() == [2, 3]
+
+
+def test_query_engine_updates_labeled_and_unlabeled_indices():
+    dataset = TensorDataset(torch.randn(5, 2), torch.randint(0, 2, (5,)))
+    engine = QueryEngine(dataset, labeled_indices=[0])
+
+    engine.add_labeled_indices([2, 3])
+
+    assert engine.labeled_indices.tolist() == [0, 2, 3]
+    assert engine.unlabeled_indices.tolist() == [1, 4]
+    assert engine.labeled_mask.tolist() == [True, False, True, True, False]
+
+
+def test_query_engine_merges_explicit_features_with_extractor_features():
+    dataset = TensorDataset(torch.randn(4, 2), torch.randint(0, 2, (4,)))
+    engine = QueryEngine(dataset, labeled_indices=[0])
+
+    class UsesExplicitFeatures(QueryStrategy):
+        def query(self, n_samples, *, unlabeled_indices, probs, **_):
+            assert probs.shape == (4, 2)
+            return unlabeled_indices[:n_samples]
+
+    picked = engine.query(
+        UsesExplicitFeatures(),
+        n_samples=2,
+        features={"probs": torch.full((4, 2), 0.5)},
+    )
+
+    assert picked.tolist() == [1, 2]

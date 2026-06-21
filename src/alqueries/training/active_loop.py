@@ -68,13 +68,14 @@ class ActiveLearningLoop:
             train_metrics = self.train_fn(model, self.dataset, self.query_engine.labeled_indices)
             features = dict(self.predict_fn(model, self.dataset))
 
-            if len(self.query_engine.unlabeled_indices) == 0:
+            unlabeled_indices = self.query_engine.unlabeled_indices
+            if len(unlabeled_indices) == 0:
                 selected_indices = np.array([], dtype=np.int64)
             else:
                 strategy = get_strategy(self.config.strategy_name, **self.config.strategy_kwargs)
                 selected_indices = self.query_engine.query(
                     strategy,
-                    n_samples=min(self.config.query_size, len(self.query_engine.unlabeled_indices)),
+                    n_samples=min(self.config.query_size, len(unlabeled_indices)),
                     features=features,
                 )
                 selected_indices = np.asarray(selected_indices, dtype=np.int64)
@@ -83,7 +84,7 @@ class ActiveLearningLoop:
                 ActiveLearningRoundResult(
                     round_index=round_index,
                     labeled_indices=self.query_engine.labeled_indices,
-                    unlabeled_indices=self.query_engine.unlabeled_indices,
+                    unlabeled_indices=unlabeled_indices,
                     selected_indices=selected_indices.copy(),
                     train_metrics=train_metrics,
                 )

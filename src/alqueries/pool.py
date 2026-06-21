@@ -1,10 +1,9 @@
 from __future__ import annotations
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING, Any, Mapping, Sequence
 
 import numpy as np
 from alqueries.base import QueryStrategy
 from alqueries.extractors.base import FeatureExtractor
-from alqueries.registry import get_strategy
 
 if TYPE_CHECKING:
     from torch.utils.data import Dataset
@@ -37,16 +36,38 @@ class QueryEngine:
         self._num_workers = num_workers
         self._dataloader_kwargs = dataloader_kwargs or {}
 
-        full = np.arange(len(dataset), dtype=np.int64) # type: ignore[assignment]
+        self._full_indices = np.arange(len(dataset), dtype=np.int64) # type: ignore[assignment]
+        self._set_labeled_indices(labeled_indices)
+
+    @property
+    def labeled_indices(self) -> np.ndarray:
+        return self._labeled_indices.copy()
+
+    @property
+    def unlabeled_indices(self) -> np.ndarray:
+        return self._unlabeled_indices.copy()
+
+    @property
+    def labeled_mask(self) -> np.ndarray:
+        return self._labeled_mask.copy()
+
+    def add_labeled_indices(self, indices: Sequence[int] | np.ndarray) -> None:
+        labeled = np.concatenate([
+            self._labeled_indices,
+            np.asarray(indices, dtype=np.int64),
+        ])
+        self._set_labeled_indices(labeled)
+
+    def _set_labeled_indices(self, labeled_indices: Sequence[int] | np.ndarray | None) -> None:
         labeled = np.array([], dtype=np.int64)
         if labeled_indices is not None:
             labeled = np.unique(np.asarray(labeled_indices, dtype=np.int64))
-        unlabeled = np.setdiff1d(full, labeled, assume_unique=True)
 
-        self._full_indices = full
+        if np.any((labeled < 0) | (labeled >= len(self._dataset))):
+            raise ValueError("labeled_indices must be valid dataset indices.")
+
         self._labeled_indices = labeled
-        self._unlabeled_indices = unlabeled
-
+        self._unlabeled_indices = np.setdiff1d(self._full_indices, labeled, assume_unique=True)
         self._labeled_mask = np.zeros(len(self._dataset), dtype=bool) # type: ignore[assignment]
         self._labeled_mask[self._labeled_indices] = True
 
@@ -62,8 +83,10 @@ class QueryEngine:
         self,
         strategy: QueryStrategy,
         n_samples: int,
+        *,
+        features: Mapping[str, Any] | None = None,
     ) -> np.ndarray:
-        from torch.utils.data import DataLoader, Subset
+        from torch.utils.data import DataLoader
 
         auto_features: dict = {}
         if self._extractor is not None:
@@ -76,10 +99,11 @@ class QueryEngine:
             )
             auto_features = self._extractor.extract(full_loader)
 
+        query_features = {**auto_features, **dict(features or {})}
         return strategy.query(
             labeled_indices=self._labeled_indices,
             unlabeled_indices=self._unlabeled_indices,
             labeled_mask=self._labeled_mask,
             n_samples=n_samples,
-            **auto_features,
+            **query_features,
         )

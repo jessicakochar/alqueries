@@ -7,6 +7,7 @@ from alqueries.base import QueryStrategy
 from alqueries.registry import register_strategy
 
 
+@register_strategy("random_sampling")
 @register_strategy("random")
 class RandomSampling(QueryStrategy):
     def __init__(self, seed: int | None = None):

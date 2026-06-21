@@ -7,6 +7,7 @@ from alqueries.base import QueryStrategy
 from alqueries.registry import register_strategy
 
 
+@register_strategy("kmeans_sampling")
 @register_strategy("kmeans")
 class KMeansSampling(QueryStrategy):
     def __init__(

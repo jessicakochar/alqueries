@@ -8,6 +8,7 @@ from alqueries.base import QueryStrategy
 from alqueries.registry import register_strategy
 
 
+@register_strategy("entropy_sampling")
 @register_strategy("entropy")
 class EntropySampling(QueryStrategy):
     def query(

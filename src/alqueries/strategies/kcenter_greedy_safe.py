@@ -5,6 +5,7 @@ from alqueries.base import QueryStrategy
 from alqueries.registry import register_strategy
 
 
+@register_strategy("kcenter_greedy_safe")
 @register_strategy("kcenter_greedy")
 class KCenterGreedy(QueryStrategy):
     def query(

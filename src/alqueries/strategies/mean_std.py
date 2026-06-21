@@ -21,7 +21,7 @@ class MeanStd(QueryStrategy):
         if mc_probs is None:
             mc_probs = probs
         pool_probs = mc_probs[:, unlabeled_indices, :]
-        sigma_c = torch.std(pool_probs, dim=0)
+        sigma_c = torch.std(pool_probs, dim=0, unbiased=False)
         uncertainties = sigma_c.mean(dim=1)
         idx = uncertainties.argsort(descending=True)[:n_samples]
         return np.asarray(unlabeled_indices[idx.detach().cpu().numpy()])

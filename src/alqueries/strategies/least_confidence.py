@@ -3,17 +3,12 @@ import numpy as np
 import torch
 from alqueries.base import QueryStrategy
 from alqueries.registry import register_strategy
+from alqueries.strategies.utils import max_confidence, pool_rows, select_by_score
 
 @register_strategy("least_confidence")
 class LeastConfidenceSampling(QueryStrategy):
 
     def query(self, unlabeled_indices: np.ndarray, n_samples: int, *, probs: torch.Tensor, **_,) -> np.ndarray:
-        # Slice to only the unlabelled pool rows — same pattern as entropy.
-        probs = probs[unlabeled_indices]
-
-        max_probs, _ = probs.max(dim=1)
-        uncertainties = 1.0 - max_probs
-        # Most uncertain = highest score. argsort descending, take first n.
-        return unlabeled_indices[uncertainties.argsort(descending=True)[:n_samples]]
-
+        uncertainties = 1.0 - max_confidence(pool_rows(probs, unlabeled_indices))
+        return select_by_score(unlabeled_indices, uncertainties, n_samples, descending=True)
 

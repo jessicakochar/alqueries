@@ -10,15 +10,7 @@ if TYPE_CHECKING:
 
 
 class QueryEngine:
-    """
-    Orchestrates pool bookkeeping and strategy execution.
 
-    It owns one full dataset and explicit labeled/unlabeled index splits,
-    then resolves the requested subset before calling a strategy.
-
-    If an extractor is configured, features are always extracted once over the
-    full dataset and passed through to the strategy call as kwargs.
-    """
 
     def __init__(
         self,

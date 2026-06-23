@@ -5,6 +5,7 @@ import torch
 
 from alqueries.base import QueryStrategy
 from alqueries.registry import register_strategy
+from alqueries.strategies.utils import max_confidence, mean_dropout_probs, select_by_score
 
 
 @register_strategy("least_confidence_dropout")
@@ -17,6 +18,5 @@ class LeastConfidenceDropoutSampling(QueryStrategy):
         mc_probs: torch.Tensor,
         **_,
     ) -> np.ndarray:
-        probs = mc_probs.mean(dim=0)[unlabeled_indices]
-        uncertainties = probs.max(dim=1)[0]
-        return unlabeled_indices[uncertainties.sort()[1][:n_samples]]
+        uncertainties = max_confidence(mean_dropout_probs(mc_probs, unlabeled_indices))
+        return select_by_score(unlabeled_indices, uncertainties, n_samples)

@@ -2,6 +2,7 @@ import numpy as np
 import torch
 from alqueries.base import QueryStrategy
 from alqueries.registry import register_strategy
+from alqueries.strategies.utils import max_confidence, pool_rows, select_by_score
 
 
 @register_strategy("var_ratio")
@@ -14,7 +15,5 @@ class VarRatio(QueryStrategy):
         probs: torch.Tensor,
         **_,
     ) -> np.ndarray:
-        probs = probs[unlabeled_indices]
-        preds = torch.max(probs, dim=1)[0]
-        uncertainties = 1.0 - preds
-        return unlabeled_indices[uncertainties.sort(descending=True)[1][:n_samples]]
+        uncertainties = 1.0 - max_confidence(pool_rows(probs, unlabeled_indices))
+        return select_by_score(unlabeled_indices, uncertainties, n_samples, descending=True)

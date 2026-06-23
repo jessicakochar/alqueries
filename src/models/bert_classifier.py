@@ -2,6 +2,8 @@ from __future__ import annotations
 import torch
 from torch import nn
 
+from models.common import classification_output
+
 class BertClassifier(nn.Module):
 
     def __init__(
@@ -43,24 +45,7 @@ class BertClassifier(nn.Module):
 
         embeddings = outputs.pooler_output
 
-        x = self.dropout(embeddings)
-
-        logits = self.classifier(x)
-
-        loss = None
-
-        if labels is not None:
-
-            loss = nn.CrossEntropyLoss()(
-                logits,
-                labels,
-            )
-
-        return {
-            "loss": loss,
-            "logits": logits,
-            "embeddings": embeddings,
-        }
+        return classification_output(embeddings, self.dropout, self.classifier, labels)
     '''
     Document Text
       ↓

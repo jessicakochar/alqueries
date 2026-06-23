@@ -6,6 +6,7 @@ import torch
 
 from alqueries.base import QueryStrategy
 from alqueries.registry import register_strategy
+from alqueries.strategies.utils import negative_entropy, pool_rows, select_by_score
 
 
 @register_strategy("entropy_sampling")
@@ -22,7 +23,5 @@ class EntropySampling(QueryStrategy):
         """
         probs: (N, C) softmax probabilities, row i aligned to unlabeled_indices[i].
         """
-        probs = probs[unlabeled_indices]
-        log_probs = torch.log(probs.clamp_min(1e-12))
-        uncertainties = (probs * log_probs).sum(1)
-        return unlabeled_indices[uncertainties.sort()[1][:n_samples]]
+        uncertainties = negative_entropy(pool_rows(probs, unlabeled_indices))
+        return select_by_score(unlabeled_indices, uncertainties, n_samples)

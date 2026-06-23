@@ -33,4 +33,4 @@ def test_least_confidence_dropout():
         mc_probs=mc_probs,
     )
 
-    assert int(selected) == 2
+    assert selected.tolist() == [2]

@@ -3,6 +3,8 @@ from __future__ import annotations
 import torch
 from torch import nn
 
+from models.common import classification_output
+
 
 class LayoutLMv3Classifier(nn.Module):
     """
@@ -47,10 +49,4 @@ class LayoutLMv3Classifier(nn.Module):
             pixel_values=pixel_values,
         )
         embeddings = outputs.pooler_output
-        logits = self.classifier(self.dropout(embeddings))
-
-        loss = None
-        if labels is not None:
-            loss = nn.CrossEntropyLoss()(logits, labels)
-
-        return {"loss": loss, "logits": logits, "embeddings": embeddings}
+        return classification_output(embeddings, self.dropout, self.classifier, labels)

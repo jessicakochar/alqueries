@@ -6,6 +6,7 @@ from typing import Any, Sequence
 import numpy as np
 import torch
 import torch.nn.functional as F
+from sklearn.metrics import accuracy_score, f1_score
 from torch.utils.data import DataLoader, Dataset, Subset
 
 
@@ -114,6 +115,47 @@ def predict_hf_text_classifier(
         "embeddings": embeddings.numpy(),
         "mc_logits": mc_logits,
         "mc_probs": F.softmax(mc_logits, dim=2),
+    }
+
+
+def evaluate_hf_text_classifier(
+    model: torch.nn.Module,
+    dataset: Dataset,
+    *,
+    tokenizer: Any,
+    indices: np.ndarray | None = None,
+    batch_size: int = 16,
+    device: str | torch.device = "cpu",
+    max_length: int = 512,
+) -> dict[str, float]:
+    model.to(device)
+    model.eval()
+
+    eval_dataset = dataset
+    if indices is not None:
+        eval_dataset = Subset(dataset, indices.tolist())
+
+    loader = DataLoader(
+        eval_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        collate_fn=TextBatchCollator(tokenizer=tokenizer, max_length=max_length),
+    )
+
+    all_preds: list[int] = []
+    all_labels: list[int] = []
+    with torch.no_grad():
+        for batch in loader:
+            batch = _move_batch(batch, device)
+            labels = batch.pop("labels")
+            outputs = model(**batch)
+            preds = outputs["logits"].argmax(dim=1)
+            all_preds.extend(preds.detach().cpu().tolist())
+            all_labels.extend(labels.detach().cpu().tolist())
+
+    return {
+        "accuracy": accuracy_score(all_labels, all_preds),
+        "macro_f1": f1_score(all_labels, all_preds, average="macro", zero_division=0),
     }
 
 

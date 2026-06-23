@@ -5,6 +5,7 @@ import torch
 
 from alqueries.base import QueryStrategy
 from alqueries.registry import register_strategy
+from alqueries.strategies.utils import mean_dropout_probs, select_by_score, top_two_margin
 
 
 @register_strategy("margin_sampling_dropout")
@@ -17,7 +18,5 @@ class MarginSamplingDropout(QueryStrategy):
         mc_probs: torch.Tensor,
         **_,
     ) -> np.ndarray:
-        probs_sorted, _ = mc_probs.mean(dim=0)[unlabeled_indices].sort(descending=True)
-        uncertainties = probs_sorted[:, 0] - probs_sorted[:, 1]
-        idx = uncertainties.argsort()[:n_samples]
-        return np.asarray(unlabeled_indices[idx.detach().cpu().numpy()])
+        uncertainties = top_two_margin(mean_dropout_probs(mc_probs, unlabeled_indices))
+        return select_by_score(unlabeled_indices, uncertainties, n_samples)

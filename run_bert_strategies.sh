@@ -2,6 +2,9 @@
 
 set -e
 
+CACHE_DIR="${ALQUERIES_CACHE_DIR:-.cache/huggingface}"
+mkdir -p "$CACHE_DIR"
+
 for strategy in random_sampling entropy_sampling least_confidence margin_sampling
 do
   echo "============================================"
@@ -15,5 +18,6 @@ do
     --query-size 10 \
     --rounds 1 \
     --epochs 1 \
-    --batch-size 4
+    --batch-size 4 \
+    --cache-dir "$CACHE_DIR"
 done

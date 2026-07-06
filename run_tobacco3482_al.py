@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 import sys
 from pathlib import Path
 
@@ -39,6 +40,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--test-ratio", type=float, default=0.2)
     parser.add_argument("--max-length", type=int, default=256)
     parser.add_argument("--mc-dropout-runs", type=int, default=5)
+    parser.add_argument(
+        "--cache-dir",
+        type=str,
+        default=None,
+        help="Persistent Hugging Face cache directory for dataset/model downloads.",
+    )
     return parser.parse_args()
 
 
@@ -69,7 +76,14 @@ def main() -> None:
     print(f"Device: {device}")
     print(f"Strategy: {args.strategy}")
 
-    data = load_tobacco3482_ocr(split="train", limit=args.limit)
+    cache_dir = None
+    if args.cache_dir is not None:
+        cache_path = Path(args.cache_dir).expanduser().resolve()
+        cache_path.mkdir(parents=True, exist_ok=True)
+        cache_dir = str(cache_path)
+        print(f"Using cache dir: {cache_dir}")
+
+    data = load_tobacco3482_ocr(split="train", limit=args.limit, cache_dir=cache_dir)
     full_dataset = TextClassificationDataset(data.texts, data.labels)
     pool_indices, test_indices = split_pool_test(len(full_dataset), args.test_ratio, args.seed)
     pool_dataset = Subset(full_dataset, pool_indices.tolist())
@@ -81,7 +95,7 @@ def main() -> None:
     print(f"Classes: {len(data.label_names)}")
     print(f"Label names: {data.label_names}")
 
-    tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+    tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased", cache_dir=cache_dir)
     rng = np.random.default_rng(args.seed)
     initial_labeled = rng.choice(
         np.arange(len(pool_dataset)),
@@ -89,13 +103,22 @@ def main() -> None:
         replace=False,
     )
     query_engine = QueryEngine(pool_dataset, labeled_indices=initial_labeled)
+    if "features" not in inspect.signature(query_engine.query).parameters:
+        raise RuntimeError(
+            "This checkout is stale: QueryEngine.query() must support features=... . "
+            "Pull/push the latest repo changes before running this script."
+        )
 
     for round_index in range(args.rounds):
         print("\n" + "=" * 80)
         print(f"ACTIVE LEARNING ROUND {round_index}")
         print("=" * 80)
 
-        model = BertClassifier(num_labels=len(data.label_names), model_name="bert-base-uncased")
+        model = BertClassifier(
+            num_labels=len(data.label_names),
+            model_name="bert-base-uncased",
+            cache_dir=cache_dir,
+        )
         train_metrics = train_hf_text_classifier(
             model,
             pool_dataset,

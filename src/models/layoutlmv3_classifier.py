@@ -19,6 +19,7 @@ class LayoutLMv3Classifier(nn.Module):
         num_labels: int,
         model_name: str = "microsoft/layoutlmv3-base",
         dropout: float = 0.1,
+        cache_dir: str | None = None,
     ) -> None:
         super().__init__()
         try:
@@ -26,7 +27,7 @@ class LayoutLMv3Classifier(nn.Module):
         except ImportError as exc:  # pragma: no cover - optional runtime dependency
             raise ImportError("Install `transformers` to use LayoutLMv3Classifier.") from exc
 
-        self.layoutlmv3 = LayoutLMv3Model.from_pretrained(model_name)
+        self.layoutlmv3 = LayoutLMv3Model.from_pretrained(model_name, cache_dir=cache_dir)
         hidden_size = self.layoutlmv3.config.hidden_size
         self.dropout = nn.Dropout(dropout)
         self.classifier = nn.Linear(hidden_size, num_labels)

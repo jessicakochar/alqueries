@@ -4,6 +4,7 @@ from torch import nn
 
 from models.common import classification_output
 
+
 class BertClassifier(nn.Module):
 
     def __init__(
@@ -11,6 +12,7 @@ class BertClassifier(nn.Module):
         num_labels: int,
         model_name: str = "bert-base-uncased",
         dropout: float = 0.1,
+        cache_dir: str | None = None,
     ) -> None:
 
         super().__init__()
@@ -20,7 +22,7 @@ class BertClassifier(nn.Module):
         except ImportError as exc:  # pragma: no cover - optional runtime dependency
             raise ImportError("Install `transformers` to use BertClassifier.") from exc
 
-        self.bert = BertModel.from_pretrained(model_name)
+        self.bert = BertModel.from_pretrained(model_name, cache_dir=cache_dir)
 
         hidden_size = self.bert.config.hidden_size
 
@@ -34,18 +36,25 @@ class BertClassifier(nn.Module):
     def forward(
         self,
         input_ids: torch.Tensor,
-        attention_mask: torch.Tensor, # which tokens are real and which are padding tokens (1 for real, 0 for padding), so the model doesn't attend to padding tokens
-        labels: torch.Tensor | None = None, #used for calculating the loss during training, not needed during inference
+        attention_mask: torch.Tensor,
+        token_type_ids: torch.Tensor | None = None,
+        labels: torch.Tensor | None = None,
     ):
 
         outputs = self.bert(
             input_ids=input_ids,
             attention_mask=attention_mask,
-        ) # text -> tokenizer -> input_ids and attention_mask -> BERT model -> outputs (last hidden state, pooler output, etc.)
+            token_type_ids=token_type_ids,
+        )
 
         embeddings = outputs.pooler_output
 
-        return classification_output(embeddings, self.dropout, self.classifier, labels)
+        return classification_output(
+            embeddings,
+            self.dropout,
+            self.classifier,
+            labels,
+        )
     '''
     Document Text
       ↓

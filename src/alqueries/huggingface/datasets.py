@@ -17,6 +17,7 @@ def load_tobacco3482_ocr(
     text_column: str = "text",
     label_column: str = "label",
     limit: int | None = None,
+    cache_dir: str | None = None,
 ) -> Tobacco3482Data:
     """
     Load OCR text + labels for Tobacco3482 from Hugging Face.
@@ -30,9 +31,17 @@ def load_tobacco3482_ocr(
     except ImportError as exc:  # pragma: no cover - optional runtime dependency
         raise ImportError("Install `datasets` to load Tobacco3482.") from exc
 
-    dataset = load_dataset(dataset_name, split=split)
+    print(f"[Dataset] Loading {dataset_name} split={split}")
+    if cache_dir is not None:
+        print(f"[Dataset] Cache dir: {cache_dir}")
+
+    dataset = load_dataset(dataset_name, split=split, cache_dir=cache_dir)
+    print(f"[Dataset] Full size loaded: {len(dataset)} samples")
+
     if limit is not None:
+        old_size = len(dataset)
         dataset = dataset.select(range(min(limit, len(dataset))))
+        print(f"[Dataset] Reduced dataset: {old_size} → {len(dataset)} samples")
 
     label_feature = dataset.features.get(label_column)
     if isinstance(label_feature, ClassLabel):

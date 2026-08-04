@@ -35,8 +35,15 @@ class KMeansSampling(QueryStrategy):
         from sklearn.decomposition import PCA
 
         embeddings = embeddings[unlabeled_indices]
+
         if self._pca_dim is not None and embeddings.shape[1] > self._pca_dim:
-            embeddings = PCA(n_components=self._pca_dim).fit_transform(embeddings)
+            n_components = min(
+            self._pca_dim,
+            embeddings.shape[0],
+            embeddings.shape[1],
+        )
+            embeddings = PCA(n_components=n_components).fit_transform(embeddings)
+
         if self._cast_to_float16:
             embeddings = embeddings.astype(np.float16)
 

@@ -11,5 +11,6 @@ from alqueries.strategies import (
     bayesian_al_dropout,
     mean_std,
     var_ratio,
-    kcenter_greedy_safe)
+    kcenter_greedy_safe,
+    token_entropy_sampling)
     # noqa: F401

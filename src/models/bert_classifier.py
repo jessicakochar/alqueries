@@ -18,20 +18,27 @@ class BertClassifier(nn.Module):
         super().__init__()
 
         try:
-            from transformers import BertModel
+            #from transformers import BertModel
+            from transformers import AutoModelForSequenceClassification
         except ImportError as exc:  # pragma: no cover - optional runtime dependency
             raise ImportError("Install `transformers` to use BertClassifier.") from exc
 
-        self.bert = BertModel.from_pretrained(model_name, cache_dir=cache_dir)
+        self.model = AutoModelForSequenceClassification.from_pretrained(
+            model_name,
+            num_labels=num_labels,
+            cache_dir=cache_dir,
+        )
 
-        hidden_size = self.bert.config.hidden_size
+        # self.bert = BertModel.from_pretrained(model_name, cache_dir=cache_dir)
 
-        self.dropout = nn.Dropout(dropout) # During training 10%(0.1) of the neurons will be randomly dropped out to prevent overfitting
+        # hidden_size = self.bert.config.hidden_size
 
-        self.classifier = nn.Linear(
-            hidden_size,
-            num_labels,
-        ) # The linear layer takes the hidden size -> number of labels (classes) as input and output dimensions -> output: logits for each class
+        # self.dropout = nn.Dropout(dropout) # During training 10%(0.1) of the neurons will be randomly dropped out to prevent overfitting
+
+        # self.classifier = nn.Linear(
+        #     hidden_size,
+        #     num_labels,
+        # ) # The linear layer takes the hidden size -> number of labels (classes) as input and output dimensions -> output: logits for each class
 
     def forward(
         self,
@@ -40,37 +47,39 @@ class BertClassifier(nn.Module):
         token_type_ids: torch.Tensor | None = None,
         labels: torch.Tensor | None = None,
     ):
-
-        outputs = self.bert(
+        outputs = self.model(
             input_ids=input_ids,
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
+            labels=labels,
+            output_hidden_states=True,
+            return_dict=True,
         )
 
-        embeddings = outputs.pooler_output
+        embeddings = outputs.hidden_states[-1][:, 0, :]  # Get the [CLS] token embedding from the last hidden state
+        return {
+            "loss": outputs.loss,
+            "logits": outputs.logits,
+            "embeddings": embeddings,
+        }
+        # outputs = self.bert(
+        #     input_ids=input_ids,
+        #     attention_mask=attention_mask,
+        #     token_type_ids=token_type_ids,
+        # )
 
-        return classification_output(
-            embeddings,
-            self.dropout,
-            self.classifier,
-            labels,
-        )
-    '''
-    Document Text
-      ↓
-Tokenizer
-      ↓
-input_ids
-      ↓
-BERT
-      ↓
-768-d embedding
-      ↓
-Dropout
-      ↓
-Linear Layer
-      ↓
-Logits
-      ↓
-CrossEntropyLoss
-    '''
+        # embeddings = outputs.pooler_output
+
+        # return classification_output(
+        #     embeddings,
+        #     self.dropout,
+        #     self.classifier,
+        #     labels,
+        # )
+
+    #     return self.model(
+    #     input_ids=input_ids,
+    #     attention_mask=attention_mask,
+    #     token_type_ids=token_type_ids,
+    #     labels=labels,
+    # )

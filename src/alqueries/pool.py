@@ -43,10 +43,34 @@ class QueryEngine:
     def labeled_mask(self) -> np.ndarray:
         return self._labeled_mask.copy()
 
-    def add_labeled_indices(self, indices: Sequence[int] | np.ndarray) -> None:
+    # def add_labeled_indices(self, indices: Sequence[int] | np.ndarray) -> None:
+    #     labeled = np.concatenate([
+    #         self._labeled_indices,
+    #         np.asarray(indices, dtype=np.int64),
+    #     ])
+    #     self._set_labeled_indices(labeled)
+
+    def add_labeled_indices(
+        self,
+        indices: Sequence[int] | np.ndarray,
+    ) -> None:
+        new_indices = np.asarray(indices, dtype=np.int64)
+
+        if new_indices.ndim != 1:
+            raise ValueError("indices must be one-dimensional.")
+
+        if np.any((new_indices < 0) | (new_indices >= len(self._dataset))):
+            raise ValueError("indices must be valid dataset indices.")
+
+        if len(np.unique(new_indices)) != len(new_indices):
+            raise ValueError("indices must not contain duplicates.")
+
+        if not np.all(np.isin(new_indices, self._unlabeled_indices)):
+            raise ValueError("Only currently unlabeled indices can be added.")
+
         labeled = np.concatenate([
             self._labeled_indices,
-            np.asarray(indices, dtype=np.int64),
+            new_indices,
         ])
         self._set_labeled_indices(labeled)
 
@@ -80,7 +104,16 @@ class QueryEngine:
     ) -> np.ndarray:
         from torch.utils.data import DataLoader
 
-        auto_features: dict = {}
+        if n_samples <= 0:
+            raise ValueError("n_samples must be greater than zero.")
+
+        if n_samples > len(self._unlabeled_indices):
+            raise ValueError(
+                "n_samples cannot exceed the number of unlabeled samples."
+            )
+
+        auto_features: dict[str, Any] = {}
+
         if self._extractor is not None:
             full_loader = DataLoader(
                 self._dataset,
@@ -91,11 +124,39 @@ class QueryEngine:
             )
             auto_features = self._extractor.extract(full_loader)
 
-        query_features = {**auto_features, **dict(features or {})}
-        return strategy.query(
-            labeled_indices=self._labeled_indices,
-            unlabeled_indices=self._unlabeled_indices,
-            labeled_mask=self._labeled_mask,
-            n_samples=n_samples,
-            **query_features,
+        query_features = {
+            **auto_features,
+            **dict(features or {}),
+        }
+
+        selected_indices = np.asarray(
+            strategy.query(
+                labeled_indices=self._labeled_indices,
+                unlabeled_indices=self._unlabeled_indices,
+                labeled_mask=self._labeled_mask,
+                n_samples=n_samples,
+                **query_features,
+            ),
+            dtype=np.int64,
         )
+
+        if selected_indices.ndim != 1:
+            raise ValueError(
+                "Strategy must return a one-dimensional array."
+            )
+
+        if len(selected_indices) > n_samples:
+            raise ValueError("Strategy returned more indices than requested.")
+
+        if len(np.unique(selected_indices)) != len(selected_indices):
+            raise ValueError(
+                "Strategy returned duplicate indices."
+            )
+        if not np.all(
+            np.isin(selected_indices, self._unlabeled_indices)
+        ):
+            raise ValueError(
+                "Strategy must return indices from the unlabeled pool."
+            )
+
+        return selected_indices

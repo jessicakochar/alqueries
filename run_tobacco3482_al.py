@@ -26,7 +26,7 @@ from alqueries.huggingface import (
 from models import BertClassifier
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run BERT active learning on Tobacco3482 OCR.")
     parser.add_argument("--strategy", default="entropy_sampling")
     parser.add_argument("--limit", type=int, default=100)
@@ -46,7 +46,7 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Persistent Hugging Face cache directory for dataset/model downloads.",
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def split_pool_test(dataset_size: int, test_ratio: float, seed: int) -> tuple[np.ndarray, np.ndarray]:
@@ -65,8 +65,8 @@ def print_selected_samples(dataset: Subset, selected_indices: np.ndarray, max_pr
         print(f"- pool_index={int(selected_index)} label={item['label']} text={preview}...")
 
 
-def main() -> None:
-    args = parse_args()
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
     if torch.cuda.is_available():

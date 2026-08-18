@@ -9,7 +9,7 @@ wheels/
 # Virtual environments
 .venv
 
-# Local experiment artifacts
+# Local experiment aodertifacts
 .cache/
 checkpoints/
 runs/

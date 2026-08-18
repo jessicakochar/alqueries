@@ -5,7 +5,6 @@ from typing import Any, Sequence
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 from sklearn.metrics import accuracy_score, f1_score
 from torch.utils.data import DataLoader, Dataset, Subset
 
@@ -82,42 +81,6 @@ def train_hf_text_classifier(
     return {"train_loss": total_loss / max(total_steps, 1)}
 
 
-def predict_hf_text_classifier(
-    model: torch.nn.Module,
-    dataset: Dataset,
-    *,
-    tokenizer: Any,
-    batch_size: int = 16,
-    device: str | torch.device = "cpu",
-    max_length: int = 512,
-    mc_dropout_runs: int = 10,
-) -> dict[str, torch.Tensor | np.ndarray]:
-    model.to(device)
-    loader = DataLoader(
-        dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        collate_fn=TextBatchCollator(tokenizer=tokenizer, max_length=max_length),
-    )
-
-    logits, embeddings = _predict_once(model, loader, device=device, train_mode=False)
-    mc_logits = torch.stack(
-        [
-            _predict_once(model, loader, device=device, train_mode=True)[0]
-            for _ in range(mc_dropout_runs)
-        ],
-        dim=0,
-    )
-
-    return {
-        "logits": logits,
-        "probs": F.softmax(logits, dim=1),
-        "embeddings": embeddings.numpy(),
-        "mc_logits": mc_logits,
-        "mc_probs": F.softmax(mc_logits, dim=2),
-    }
-
-
 def evaluate_hf_text_classifier(
     model: torch.nn.Module,
     dataset: Dataset,
@@ -157,28 +120,6 @@ def evaluate_hf_text_classifier(
         "accuracy": accuracy_score(all_labels, all_preds),
         "macro_f1": f1_score(all_labels, all_preds, average="macro", zero_division=0),
     }
-
-
-def _predict_once(
-    model: torch.nn.Module,
-    loader: DataLoader,
-    *,
-    device: str | torch.device,
-    train_mode: bool,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    model.train(train_mode)
-    logits_chunks: list[torch.Tensor] = []
-    embedding_chunks: list[torch.Tensor] = []
-
-    with torch.no_grad():
-        for batch in loader:
-            batch = _move_batch(batch, device)
-            labels = batch.pop("labels")
-            outputs = model(**batch, labels=labels)
-            logits_chunks.append(outputs["logits"].detach().cpu())
-            embedding_chunks.append(outputs["embeddings"].detach().cpu())
-
-    return torch.cat(logits_chunks, dim=0), torch.cat(embedding_chunks, dim=0)
 
 
 def _move_batch(batch: dict[str, torch.Tensor], device: str | torch.device) -> dict[str, torch.Tensor]:

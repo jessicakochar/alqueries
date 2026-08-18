@@ -1,9 +1,11 @@
 from types import SimpleNamespace
 
 import torch
+from torch.utils.data import DataLoader
 from torch.utils.data import Dataset
 
-from alqueries.huggingface.cord import IGNORE_INDEX, predict_layoutlmv3_token_features
+from alqueries.extractors import TokenClassificationFeatureExtractor
+from alqueries.huggingface.cord import IGNORE_INDEX
 
 
 class TinyCordDataset(Dataset):
@@ -38,15 +40,12 @@ class TinyLayoutLMv3Model(torch.nn.Module):
 
 
 def test_layoutlmv3_token_features_skip_labels_and_return_document_uncertainty():
-    features = predict_layoutlmv3_token_features(
-        TinyLayoutLMv3Model(),
-        TinyCordDataset(),
-        batch_size=2,
-    )
+    extractor = TokenClassificationFeatureExtractor(TinyLayoutLMv3Model())
+    features = extractor.extract(DataLoader(TinyCordDataset(), batch_size=2))
 
     assert features["probs"].shape == (2, 2)
     assert features["embeddings"].shape == (2, 4)
-    assert len(features["token_probs"]) == 2
-    assert len(features["token_uncertainties"]) == 2
-    assert features["mean_token_uncertainty"].shape == (2,)
-    assert features["max_token_uncertainty"].shape == (2,)
+    assert features["token_logits"].shape == (2, 3, 2)
+    assert features["token_probs"].shape == (2, 3, 2)
+    assert features["token_embeddings"].shape == (2, 3, 4)
+    assert features["valid_token_mask"].shape == (2, 3)

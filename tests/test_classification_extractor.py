@@ -4,7 +4,10 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 
-from alqueries.extractors.classification import ClassificationFeatureExtractor
+from alqueries.extractors.classification import (
+    ClassificationFeatureExtractor,
+    HuggingFaceClassificationFeatureExtractor,
+)
 
 
 def test_extract_returns_logits_probs_and_embeddings():
@@ -50,3 +53,49 @@ def test_extract_raises_when_embedding_layer_is_missing():
 
     with pytest.raises(ValueError, match="not found"):
         extractor.extract(loader)
+
+
+class TinyHFClassifier(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.linear = nn.Linear(2, 2)
+
+    def forward(self, input_ids, attention_mask=None, labels=None):
+        embeddings = input_ids.float()
+        logits = self.linear(embeddings)
+        loss = None
+        if labels is not None:
+            loss = nn.functional.cross_entropy(logits, labels)
+        return {"loss": loss, "logits": logits, "embeddings": embeddings}
+
+
+def test_huggingface_classification_extractor_returns_general_features():
+    loader = DataLoader(
+        [
+            {
+                "input_ids": torch.tensor([1.0, 0.0]),
+                "attention_mask": torch.tensor([1]),
+                "labels": torch.tensor(0),
+            },
+            {
+                "input_ids": torch.tensor([0.0, 1.0]),
+                "attention_mask": torch.tensor([1]),
+                "labels": torch.tensor(1),
+            },
+        ],
+        batch_size=2,
+    )
+    extractor = HuggingFaceClassificationFeatureExtractor(
+        model=TinyHFClassifier(),
+        device="cpu",
+        mc_dropout_runs=2,
+    )
+
+    out = extractor.extract(loader)
+
+    assert set(out.keys()) == {"logits", "probs", "embeddings", "mc_logits", "mc_probs"}
+    assert out["logits"].shape == (2, 2)
+    assert out["probs"].shape == (2, 2)
+    assert out["embeddings"].shape == (2, 2)
+    assert out["mc_logits"].shape == (2, 2, 2)
+    assert out["mc_probs"].shape == (2, 2, 2)

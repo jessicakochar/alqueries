@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from transformers import LayoutLMv3ImageProcessor, LayoutLMv3TokenizerFast
 
@@ -15,10 +16,10 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from alqueries import QueryEngine, get_strategy
+from alqueries.extractors import TokenClassificationFeatureExtractor
 from alqueries.huggingface import (
     create_layoutlmv3_token_classifier,
     load_cord_token_classification,
-    predict_layoutlmv3_token_features,
     train_layoutlmv3_token_classifier,
 )
 
@@ -221,12 +222,16 @@ def main(argv: list[str] | None = None) -> None:
             print("No unlabeled receipts left.")
             break
 
-        features = predict_layoutlmv3_token_features(
-            model,
+        feature_loader = DataLoader(
             dataset,
             batch_size=args.batch_size,
+            shuffle=False,
+        )
+        extractor = TokenClassificationFeatureExtractor(
+            model=model,
             device=device,
         )
+        features = extractor.extract(feature_loader)
         strategy = get_strategy(args.strategy)
         selected_indices = query_engine.query(
             strategy,

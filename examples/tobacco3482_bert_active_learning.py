@@ -2,16 +2,32 @@ from __future__ import annotations
 
 from functools import partial
 
+from torch.utils.data import DataLoader
 from transformers import BertTokenizer
 
+from alqueries.extractors import HuggingFaceClassificationFeatureExtractor
 from alqueries.huggingface import (
+    TextBatchCollator,
     TextClassificationDataset,
     load_tobacco3482_ocr,
-    predict_hf_text_classifier,
     train_hf_text_classifier,
 )
 from alqueries.training import ActiveLearningLoop, ActiveLearningLoopConfig
 from models import BertClassifier
+
+
+def extract_text_features(model, dataset, *, tokenizer, batch_size, mc_dropout_runs):
+    loader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        collate_fn=TextBatchCollator(tokenizer=tokenizer),
+    )
+    extractor = HuggingFaceClassificationFeatureExtractor(
+        model=model,
+        mc_dropout_runs=mc_dropout_runs,
+    )
+    return extractor.extract(loader)
 
 
 def main() -> None:
@@ -38,7 +54,7 @@ def main() -> None:
             lr=2e-5,
         ),
         predict_fn=partial(
-            predict_hf_text_classifier,
+            extract_text_features,
             tokenizer=tokenizer,
             batch_size=16,
             mc_dropout_runs=10,

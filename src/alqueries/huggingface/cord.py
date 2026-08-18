@@ -6,7 +6,6 @@ from typing import Any
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset, Subset
 
 
@@ -170,68 +169,6 @@ def train_layoutlmv3_token_classifier(
                 break
 
     return {"train_loss": total_loss / max(steps, 1), "train_steps": float(steps)}
-
-
-def predict_layoutlmv3_token_features(
-    model: torch.nn.Module,
-    dataset: Dataset,
-    *,
-    batch_size: int = 1,
-    device: str | torch.device = "cpu",
-) -> dict[str, torch.Tensor | np.ndarray | list[torch.Tensor]]:
-    model.to(device)
-    model.eval()
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
-
-    document_probs: list[torch.Tensor] = []
-    document_embeddings: list[torch.Tensor] = []
-    token_probs: list[torch.Tensor] = []
-    token_embeddings: list[torch.Tensor] = []
-    token_uncertainties: list[torch.Tensor] = []
-    document_mean_uncertainties: list[torch.Tensor] = []
-    document_max_uncertainties: list[torch.Tensor] = []
-
-    with torch.no_grad():
-        for batch in loader:
-            labels = batch["labels"]
-            batch = _move_cord_batch(batch, device)
-            model_inputs = {
-                key: value
-                for key, value in batch.items()
-                if key != "labels"
-            }
-            outputs = model(**model_inputs, output_hidden_states=True)
-            probs = F.softmax(outputs.logits.detach().cpu(), dim=-1)
-            hidden = outputs.hidden_states[-1].detach().cpu()
-            hidden = hidden[:, : labels.shape[1], :]
-            valid_mask = labels.ne(IGNORE_INDEX)
-
-            for row_index in range(probs.shape[0]):
-                row_mask = valid_mask[row_index]
-                row_probs = probs[row_index][row_mask]
-                row_hidden = hidden[row_index][row_mask]
-                if row_probs.numel() == 0:
-                    row_probs = probs[row_index, :1]
-                    row_hidden = hidden[row_index, :1]
-
-                entropy = -(row_probs * torch.log(row_probs.clamp_min(1e-12))).sum(dim=-1)
-                token_probs.append(row_probs)
-                token_embeddings.append(row_hidden)
-                token_uncertainties.append(entropy)
-                document_probs.append(row_probs.mean(dim=0))
-                document_embeddings.append(row_hidden.mean(dim=0))
-                document_mean_uncertainties.append(entropy.mean())
-                document_max_uncertainties.append(entropy.max())
-
-    return {
-        "probs": torch.stack(document_probs, dim=0),
-        "embeddings": torch.stack(document_embeddings, dim=0).numpy(),
-        "token_probs": token_probs,
-        "token_embeddings": token_embeddings,
-        "token_uncertainties": token_uncertainties,
-        "mean_token_uncertainty": torch.stack(document_mean_uncertainties).numpy(),
-        "max_token_uncertainty": torch.stack(document_max_uncertainties).numpy(),
-    }
 
 
 def create_layoutlmv3_token_classifier(

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from torch.utils.data import Subset
+from torch.utils.data import DataLoader, Subset
 from transformers import AutoTokenizer
 
 ROOT = Path(__file__).resolve().parent
@@ -16,11 +16,12 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from alqueries import QueryEngine, get_strategy
+from alqueries.extractors import HuggingFaceClassificationFeatureExtractor
 from alqueries.huggingface import (
     TextClassificationDataset,
+    TextBatchCollator,
     evaluate_hf_text_classifier,
     load_tobacco3482_ocr,
-    predict_hf_text_classifier,
     train_hf_text_classifier,
 )
 from models import BertClassifier
@@ -149,15 +150,18 @@ def main(argv: list[str] | None = None) -> None:
             print("No unlabeled samples left.")
             break
 
-        features = predict_hf_text_classifier(
-            model,
+        feature_loader = DataLoader(
             pool_dataset,
-            tokenizer=tokenizer,
             batch_size=args.batch_size,
+            shuffle=False,
+            collate_fn=TextBatchCollator(tokenizer=tokenizer, max_length=args.max_length),
+        )
+        extractor = HuggingFaceClassificationFeatureExtractor(
+            model=model,
             device=device,
-            max_length=args.max_length,
             mc_dropout_runs=args.mc_dropout_runs,
         )
+        features = extractor.extract(feature_loader)
         strategy = get_strategy(args.strategy)
         selected_indices = query_engine.query(
             strategy,

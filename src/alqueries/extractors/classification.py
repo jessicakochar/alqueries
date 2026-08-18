@@ -94,3 +94,67 @@ class ClassificationFeatureExtractor(FeatureExtractor):
         stacked = torch.stack(runs, dim=0)
         self._model.train(was_training)
         return stacked
+
+
+class HuggingFaceClassificationFeatureExtractor(FeatureExtractor):
+    """
+    Extracts general classification features from Hugging Face-style models.
+
+    Returned features are strategy-agnostic: strategies can choose whether to
+    use logits, probabilities, embeddings, MC logits, or MC probabilities.
+    """
+
+    def __init__(
+        self,
+        model: torch.nn.Module,
+        device: torch.device | str = "cpu",
+        mc_dropout_runs: int = 10,
+    ):
+        super().__init__(model, device)
+        self._mc_dropout_runs = mc_dropout_runs
+
+    def extract(self, loader: DataLoader) -> dict[str, np.ndarray | torch.Tensor]:
+        self._model.to(self._device)
+        logits, embeddings = self._predict_once(loader, train_mode=False)
+        mc_logits = torch.stack(
+            [
+                self._predict_once(loader, train_mode=True)[0]
+                for _ in range(self._mc_dropout_runs)
+            ],
+            dim=0,
+        )
+
+        return {
+            "logits": logits,
+            "probs": F.softmax(logits, dim=1),
+            "embeddings": embeddings.numpy(),
+            "mc_logits": mc_logits,
+            "mc_probs": F.softmax(mc_logits, dim=2),
+        }
+
+    def _predict_once(
+        self,
+        loader: DataLoader,
+        *,
+        train_mode: bool,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        self._model.train(train_mode)
+        logits_chunks: list[torch.Tensor] = []
+        embedding_chunks: list[torch.Tensor] = []
+
+        with torch.no_grad():
+            for batch in loader:
+                batch = _move_dict_batch(batch, self._device)
+                labels = batch.pop("labels", None)
+                outputs = self._model(**batch, labels=labels)
+                logits_chunks.append(outputs["logits"].detach().cpu())
+                embedding_chunks.append(outputs["embeddings"].detach().cpu())
+
+        return torch.cat(logits_chunks, dim=0), torch.cat(embedding_chunks, dim=0)
+
+
+def _move_dict_batch(
+    batch: dict[str, torch.Tensor],
+    device: torch.device,
+) -> dict[str, torch.Tensor]:
+    return {key: value.to(device) for key, value in batch.items()}

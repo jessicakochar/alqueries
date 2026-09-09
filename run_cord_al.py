@@ -26,10 +26,15 @@ from alqueries.huggingface import (
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run a small CORD LayoutLMv3 token-classification active-learning smoke test."
+        description="Run CORD LayoutLMv3 token-classification active learning."
     )
     parser.add_argument("--strategy", default="token_entropy_sampling")
-    parser.add_argument("--limit", type=int, default=10)
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Optional number of CORD samples to load. Omit for the full dataset.",
+    )
     parser.add_argument("--initial-size", type=int, default=1)
     parser.add_argument("--query-size", type=int, default=1)
     parser.add_argument("--rounds", type=int, default=1)
@@ -46,7 +51,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--full-labeled-loader",
         action="store_true",
-        help="Use all labeled batches. Default is one batch for the 10-epoch smoke test.",
+        help="Use all labeled batches instead of one quick smoke-test batch.",
     )
     return parser.parse_args(argv)
 
@@ -297,7 +302,7 @@ def main(argv: list[str] | None = None) -> None:
             f"unlabeled={record['unlabeled_count']}, "
             f"selected={record['selected_indices']}"
         )
-    print("\nFinished CORD active learning smoke run.")
+    print("\nFinished CORD active learning run.")
 
 
 if __name__ == "__main__":

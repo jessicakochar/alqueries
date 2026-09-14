@@ -14,6 +14,7 @@ from run_cord_al import (
     load_model_state_from_checkpoint,
     log_tensorboard_metrics,
     model_state_dict_to_cpu,
+    save_run_history_csv,
     save_checkpoint,
 )
 
@@ -30,10 +31,16 @@ def test_save_and_load_checkpoint_round_state(tmp_path):
     checkpoint_path = tmp_path / "latest.pt"
     args = Namespace(strategy="token_entropy_sampling", rounds=2)
     metrics = {
+        "epochs": 30,
         "train_loss": 2.5,
         "train_steps": 1.0,
-        "labeled_count": 3,
-        "unlabeled_count": 7,
+        "eval_accuracy": 0.75,
+        "eval_macro_f1": 0.5,
+        "eval_steps": 2.0,
+        "train_labeled_count": 1,
+        "pre_query_unlabeled_count": 9,
+        "post_query_labeled_count": 3,
+        "post_query_unlabeled_count": 7,
         "selected_indices": [4, 5],
     }
     model_state_dict = {"classifier.weight": torch.ones(2, 2)}
@@ -65,10 +72,16 @@ def test_save_and_load_checkpoint_round_state(tmp_path):
 def test_log_tensorboard_metrics_writes_expected_scalars():
     writer = RecordingWriter()
     metrics = {
+        "epochs": 30,
         "train_loss": 2.5,
         "train_steps": 1.0,
-        "labeled_count": 3,
-        "unlabeled_count": 7,
+        "eval_accuracy": 0.75,
+        "eval_macro_f1": 0.5,
+        "eval_steps": 2.0,
+        "train_labeled_count": 1,
+        "pre_query_unlabeled_count": 9,
+        "post_query_labeled_count": 3,
+        "post_query_unlabeled_count": 7,
     }
 
     log_tensorboard_metrics(writer, metrics, round_index=2)
@@ -76,8 +89,40 @@ def test_log_tensorboard_metrics_writes_expected_scalars():
     assert writer.scalars == [
         ("train/loss", 2.5, 2),
         ("train/steps", 1.0, 2),
-        ("pool/labeled_count", 3, 2),
-        ("pool/unlabeled_count", 7, 2),
+        ("eval/accuracy", 0.75, 2),
+        ("eval/macro_f1", 0.5, 2),
+        ("eval/steps", 2.0, 2),
+        ("pool/train_labeled_count", 1, 2),
+        ("pool/pre_query_unlabeled_count", 9, 2),
+        ("pool/post_query_labeled_count", 3, 2),
+        ("pool/post_query_unlabeled_count", 7, 2),
+    ]
+
+
+def test_save_run_history_csv_writes_eval_metrics(tmp_path):
+    output_path = tmp_path / "results.csv"
+    run_history = [
+        {
+            "round": 0,
+            "epochs": 30,
+            "train_loss": 2.5,
+            "train_steps": 10.0,
+            "eval_accuracy": 0.75,
+            "eval_macro_f1": 0.5,
+            "eval_steps": 3.0,
+            "train_labeled_count": 10,
+            "pre_query_unlabeled_count": 790,
+            "post_query_labeled_count": 20,
+            "post_query_unlabeled_count": 780,
+            "selected_indices": [1, 2, 3],
+        }
+    ]
+
+    save_run_history_csv(output_path, run_history)
+
+    assert output_path.read_text().splitlines() == [
+        "round,epochs,train_loss,train_steps,eval_accuracy,eval_macro_f1,eval_steps,train_labeled_count,pre_query_unlabeled_count,post_query_labeled_count,post_query_unlabeled_count,selected_indices",
+        '0,30,2.5,10.0,0.75,0.5,3.0,10,790,20,780,"1, 2, 3"',
     ]
 
 

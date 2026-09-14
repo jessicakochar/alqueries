@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import sys
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from alqueries import QueryEngine, get_strategy
 from alqueries.extractors import TokenClassificationFeatureExtractor
 from alqueries.huggingface import (
     create_layoutlmv3_token_classifier,
+    evaluate_layoutlmv3_token_classifier,
     load_cord_token_classification,
     train_layoutlmv3_token_classifier,
 )
@@ -38,20 +40,28 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--initial-size", type=int, default=1)
     parser.add_argument("--query-size", type=int, default=1)
     parser.add_argument("--rounds", type=int, default=1)
-    parser.add_argument("--epochs", type=int, default=10)
+    parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--lr", type=float, default=5e-5)
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--max-length", type=int, default=256)
     parser.add_argument("--cache-dir", default=None)
     parser.add_argument("--model-name", default="microsoft/layoutlmv3-base")
+    parser.add_argument("--eval-split", default="validation")
+    parser.add_argument("--eval-limit", type=int, default=None)
     parser.add_argument("--checkpoint-dir", default="checkpoints/cord")
     parser.add_argument("--tensorboard-dir", default="runs/cord")
+    parser.add_argument("--results-csv", default=None)
     parser.add_argument("--resume", default=None)
     parser.add_argument(
         "--full-labeled-loader",
         action="store_true",
-        help="Use all labeled batches instead of one quick smoke-test batch.",
+        help="Deprecated; full labeled training is now the default.",
+    )
+    parser.add_argument(
+        "--one-batch-smoke-test",
+        action="store_true",
+        help="Train one batch per epoch for quick debugging only.",
     )
     return parser.parse_args(argv)
 
@@ -108,11 +118,43 @@ def load_model_state_from_checkpoint(model, checkpoint) -> bool:
     return True
 
 
+def save_run_history_csv(path, run_history):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = [
+        "round",
+        "epochs",
+        "train_loss",
+        "train_steps",
+        "eval_accuracy",
+        "eval_macro_f1",
+        "eval_steps",
+        "train_labeled_count",
+        "pre_query_unlabeled_count",
+        "post_query_labeled_count",
+        "post_query_unlabeled_count",
+        "selected_indices",
+    ]
+    with path.open("w", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+        writer.writeheader()
+        for record in run_history:
+            row = {key: record.get(key) for key in fieldnames}
+            row["selected_indices"] = ", ".join(
+                str(index) for index in record.get("selected_indices", [])
+            )
+            writer.writerow(row)
+
+
 def log_tensorboard_metrics(writer, metrics, round_index):
     writer.add_scalar("train/loss", metrics["train_loss"], round_index)
     writer.add_scalar("train/steps", metrics["train_steps"], round_index)
-    writer.add_scalar("pool/labeled_count", metrics["labeled_count"], round_index)
-    writer.add_scalar("pool/unlabeled_count", metrics["unlabeled_count"], round_index)
+    writer.add_scalar("eval/accuracy", metrics["eval_accuracy"], round_index)
+    writer.add_scalar("eval/macro_f1", metrics["eval_macro_f1"], round_index)
+    writer.add_scalar("eval/steps", metrics["eval_steps"], round_index)
+    writer.add_scalar("pool/train_labeled_count", metrics["train_labeled_count"], round_index)
+    writer.add_scalar("pool/pre_query_unlabeled_count", metrics["pre_query_unlabeled_count"], round_index)
+    writer.add_scalar("pool/post_query_labeled_count", metrics["post_query_labeled_count"], round_index)
+    writer.add_scalar("pool/post_query_unlabeled_count", metrics["post_query_unlabeled_count"], round_index)
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
@@ -151,7 +193,19 @@ def main(argv: list[str] | None = None) -> None:
         cache_dir=cache_dir,
     )
     dataset = cord.dataset
-    print(f"Loaded CORD samples: {len(dataset)}")
+    eval_cord = load_cord_token_classification(
+        tokenizer=tokenizer,
+        image_processor=image_processor,
+        split=args.eval_split,
+        limit=args.eval_limit,
+        max_length=args.max_length,
+        cache_dir=cache_dir,
+        label_names=cord.label_names,
+        label_to_id={label: index for index, label in enumerate(cord.label_names)},
+    )
+    eval_dataset = eval_cord.dataset
+    print(f"Loaded CORD train samples: {len(dataset)}")
+    print(f"Loaded CORD eval samples: {len(eval_dataset)}")
     print(f"Token labels: {len(cord.label_names)}")
     print(f"Label names: {cord.label_names}")
 
@@ -163,6 +217,11 @@ def main(argv: list[str] | None = None) -> None:
     # )
     checkpoint_dir = Path(args.checkpoint_dir).expanduser().resolve()
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    results_csv = (
+        Path(args.results_csv).expanduser().resolve()
+        if args.results_csv is not None
+        else checkpoint_dir / "cord_active_learning_results.csv"
+    )
     tensorboard_dir = Path(args.tensorboard_dir).expanduser().resolve()
     tensorboard_dir.mkdir(parents=True, exist_ok=True)
     writer = SummaryWriter(log_dir=str(tensorboard_dir))
@@ -216,41 +275,61 @@ def main(argv: list[str] | None = None) -> None:
             epochs=args.epochs,
             lr=args.lr,
             device=device,
-            one_batch=not args.full_labeled_loader,
+            one_batch=args.one_batch_smoke_test,
         )
         print(f"Labeled receipts: {len(query_engine.labeled_indices)}")
         print(f"Unlabeled receipts: {len(query_engine.unlabeled_indices)}")
+        print(f"Epochs: {args.epochs}")
         print(f"Train steps: {train_metrics['train_steps']:.0f}")
         print(f"Train loss: {train_metrics['train_loss']:.4f}")
 
-        if len(query_engine.unlabeled_indices) == 0:
-            print("No unlabeled receipts left.")
-            break
-
-        feature_loader = DataLoader(
-            dataset,
+        eval_metrics = evaluate_layoutlmv3_token_classifier(
+            model,
+            eval_dataset,
             batch_size=args.batch_size,
-            shuffle=False,
-        )
-        extractor = TokenClassificationFeatureExtractor(
-            model=model,
             device=device,
         )
-        features = extractor.extract(feature_loader)
-        strategy = get_strategy(args.strategy)
-        selected_indices = query_engine.query(
-            strategy,
-            n_samples=min(args.query_size, len(query_engine.unlabeled_indices)),
-            features=features,
-        )
-        selected_indices = np.asarray(selected_indices, dtype=np.int64)
-        print_selected_receipts(dataset, selected_indices)
-        query_engine.add_labeled_indices(selected_indices)
+        print(f"Eval steps: {eval_metrics['eval_steps']:.0f}")
+        print(f"Eval accuracy: {eval_metrics['eval_accuracy']:.4f}")
+        print(f"Eval macro F1: {eval_metrics['eval_macro_f1']:.4f}")
+
+        train_labeled_count = len(query_engine.labeled_indices)
+        pre_query_unlabeled_count = len(query_engine.unlabeled_indices)
+        selected_indices = np.array([], dtype=np.int64)
+
+        if pre_query_unlabeled_count == 0:
+            print("No unlabeled receipts left.")
+        else:
+            feature_loader = DataLoader(
+                dataset,
+                batch_size=args.batch_size,
+                shuffle=False,
+            )
+            extractor = TokenClassificationFeatureExtractor(
+                model=model,
+                device=device,
+            )
+            features = extractor.extract(feature_loader)
+            strategy = get_strategy(args.strategy)
+            selected_indices = query_engine.query(
+                strategy,
+                n_samples=min(args.query_size, pre_query_unlabeled_count),
+                features=features,
+            )
+            selected_indices = np.asarray(selected_indices, dtype=np.int64)
+            print_selected_receipts(dataset, selected_indices)
+            query_engine.add_labeled_indices(selected_indices)
         metrics = {
+                "epochs": args.epochs,
                 "train_loss": train_metrics["train_loss"],
                 "train_steps": train_metrics["train_steps"],
-                "labeled_count": len(query_engine.labeled_indices),
-                "unlabeled_count": len(query_engine.unlabeled_indices),
+                "eval_accuracy": eval_metrics["eval_accuracy"],
+                "eval_macro_f1": eval_metrics["eval_macro_f1"],
+                "eval_steps": eval_metrics["eval_steps"],
+                "train_labeled_count": train_labeled_count,
+                "pre_query_unlabeled_count": pre_query_unlabeled_count,
+                "post_query_labeled_count": len(query_engine.labeled_indices),
+                "post_query_unlabeled_count": len(query_engine.unlabeled_indices),
                 "selected_indices": selected_indices.tolist(),
             }
         run_history.append({
@@ -258,6 +337,7 @@ def main(argv: list[str] | None = None) -> None:
             **metrics,
         })
         log_tensorboard_metrics(writer, metrics, round_index)
+        save_run_history_csv(results_csv, run_history)
 
         checkpoint_path = checkpoint_dir / f"round_{round_index}.pt"
         save_checkpoint(
@@ -280,7 +360,10 @@ def main(argv: list[str] | None = None) -> None:
             )
 
         print(f"Saved checkpoint: {checkpoint_path}")
+        print(f"Saved results CSV: {results_csv}")
         last_checkpoint_path = checkpoint_path
+        if pre_query_unlabeled_count == 0:
+            break
 
     writer.flush()
     writer.close()
@@ -291,15 +374,29 @@ def main(argv: list[str] | None = None) -> None:
     print(f"Rounds completed: {len(run_history)}")
     print(f"Final labeled receipts: {len(query_engine.labeled_indices)}")
     print(f"Final unlabeled receipts: {len(query_engine.unlabeled_indices)}")
+    print(f"Epochs per round: {args.epochs}")
     if last_checkpoint_path is not None:
         print(f"Last checkpoint: {last_checkpoint_path}")
 
     for record in run_history:
+        train_labeled_count = record.get("train_labeled_count", record.get("labeled_count"))
+        post_query_labeled_count = record.get(
+            "post_query_labeled_count",
+            record.get("labeled_count"),
+        )
+        post_query_unlabeled_count = record.get(
+            "post_query_unlabeled_count",
+            record.get("unlabeled_count"),
+        )
         print(
             f"Round {record['round']}: "
             f"loss={record['train_loss']:.4f}, "
-            f"labeled={record['labeled_count']}, "
-            f"unlabeled={record['unlabeled_count']}, "
+            f"epochs={record.get('epochs', 'n/a')}, "
+            f"eval_accuracy={record.get('eval_accuracy', 0.0):.4f}, "
+            f"eval_macro_f1={record.get('eval_macro_f1', 0.0):.4f}, "
+            f"train_labeled={train_labeled_count}, "
+            f"post_query_labeled={post_query_labeled_count}, "
+            f"post_query_unlabeled={post_query_unlabeled_count}, "
             f"selected={record['selected_indices']}"
         )
     print("\nFinished CORD active learning run.")

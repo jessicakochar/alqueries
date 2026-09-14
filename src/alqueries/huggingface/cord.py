@@ -6,6 +6,7 @@ from typing import Any
 
 import numpy as np
 import torch
+from sklearn.metrics import accuracy_score, f1_score
 from torch.utils.data import DataLoader, Dataset, Subset
 
 
@@ -28,6 +29,8 @@ def load_cord_token_classification(
     limit: int | None = None,
     max_length: int = 256,
     cache_dir: str | None = None,
+    label_to_id: dict[str, int] | None = None,
+    label_names: list[str] | None = None,
 ) -> CordData:
     try:
         from datasets import load_dataset
@@ -38,8 +41,10 @@ def load_cord_token_classification(
     if limit is not None:
         raw_dataset = raw_dataset.select(range(min(limit, len(raw_dataset))))
 
-    label_names = collect_cord_label_names(raw_dataset)
-    label_to_id = {label: index for index, label in enumerate(label_names)}
+    if label_names is None:
+        label_names = collect_cord_label_names(raw_dataset)
+    if label_to_id is None:
+        label_to_id = {label: index for index, label in enumerate(label_names)}
     return CordData(
         dataset=CordTokenClassificationDataset(
             raw_dataset,
@@ -99,7 +104,7 @@ class CordTokenClassificationDataset(Dataset):
         sample = self.raw_dataset[int(index)]
         words_labels_boxes = extract_cord_words_labels_boxes(sample)
         words = [item[0] for item in words_labels_boxes]
-        word_labels = [self.label_to_id[item[1]] for item in words_labels_boxes]
+        word_labels = [self.label_to_id.get(item[1], IGNORE_INDEX) for item in words_labels_boxes]
         boxes = [item[2] for item in words_labels_boxes]
 
         encoded = self.tokenizer(
@@ -169,6 +174,48 @@ def train_layoutlmv3_token_classifier(
                 break
 
     return {"train_loss": total_loss / max(steps, 1), "train_steps": float(steps)}
+
+
+def evaluate_layoutlmv3_token_classifier(
+    model: torch.nn.Module,
+    dataset: Dataset,
+    *,
+    batch_size: int = 1,
+    device: str | torch.device = "cpu",
+) -> dict[str, float]:
+    model.to(device)
+    model.eval()
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
+
+    all_preds: list[int] = []
+    all_labels: list[int] = []
+    steps = 0
+
+    with torch.no_grad():
+        for batch in loader:
+            batch = _move_cord_batch(batch, device)
+            labels = batch.pop("labels")
+            outputs = model(**batch)
+            preds = outputs.logits.argmax(dim=-1)
+            valid_mask = labels.ne(IGNORE_INDEX)
+
+            all_preds.extend(preds[valid_mask].detach().cpu().tolist())
+            all_labels.extend(labels[valid_mask].detach().cpu().tolist())
+            steps += 1
+
+    if not all_labels:
+        return {"eval_accuracy": 0.0, "eval_macro_f1": 0.0, "eval_steps": float(steps)}
+
+    return {
+        "eval_accuracy": accuracy_score(all_labels, all_preds),
+        "eval_macro_f1": f1_score(
+            all_labels,
+            all_preds,
+            average="macro",
+            zero_division=0,
+        ),
+        "eval_steps": float(steps),
+    }
 
 
 def create_layoutlmv3_token_classifier(

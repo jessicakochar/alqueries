@@ -1,11 +1,12 @@
 from types import SimpleNamespace
 
+import pytest
 import torch
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset
 
 from alqueries.extractors import TokenClassificationFeatureExtractor
-from alqueries.huggingface.cord import IGNORE_INDEX
+from alqueries.huggingface.cord import IGNORE_INDEX, evaluate_layoutlmv3_token_classifier
 
 
 class TinyCordDataset(Dataset):
@@ -49,3 +50,15 @@ def test_layoutlmv3_token_features_skip_labels_and_return_document_uncertainty()
     assert features["token_probs"].shape == (2, 3, 2)
     assert features["token_embeddings"].shape == (2, 3, 4)
     assert features["valid_token_mask"].shape == (2, 3)
+
+
+def test_layoutlmv3_token_evaluation_ignores_padding_labels():
+    metrics = evaluate_layoutlmv3_token_classifier(
+        TinyLayoutLMv3Model(),
+        TinyCordDataset(),
+        batch_size=2,
+    )
+
+    assert metrics["eval_accuracy"] == pytest.approx(0.25)
+    assert metrics["eval_macro_f1"] == pytest.approx(0.2)
+    assert metrics["eval_steps"] == 1.0

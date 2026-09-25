@@ -2,6 +2,7 @@ from argparse import Namespace
 from pathlib import Path
 import sys
 
+import pytest
 import numpy as np
 import torch
 
@@ -16,6 +17,7 @@ from run_cord_al import (
     model_state_dict_to_cpu,
     save_run_history_csv,
     save_checkpoint,
+    validate_checkpoint_labels,
 )
 
 
@@ -35,7 +37,10 @@ def test_save_and_load_checkpoint_round_state(tmp_path):
         "train_loss": 2.5,
         "train_steps": 1.0,
         "eval_accuracy": 0.75,
-        "eval_macro_f1": 0.5,
+        "eval_precision": 0.5,
+        "eval_recall": 0.5,
+        "eval_micro_f1": 0.5,
+        "eval_split": "validation",
         "eval_steps": 2.0,
         "train_labeled_count": 1,
         "pre_query_unlabeled_count": 9,
@@ -57,7 +62,7 @@ def test_save_and_load_checkpoint_round_state(tmp_path):
     )
     checkpoint = load_checkpoint(checkpoint_path)
 
-    assert checkpoint["schema_version"] == 1
+    assert checkpoint["schema_version"] == 2
     assert checkpoint["round_index"] == 0
     assert checkpoint["labeled_indices"] == [0, 4, 5]
     assert checkpoint["args"]["strategy"] == "token_entropy_sampling"
@@ -76,7 +81,10 @@ def test_log_tensorboard_metrics_writes_expected_scalars():
         "train_loss": 2.5,
         "train_steps": 1.0,
         "eval_accuracy": 0.75,
-        "eval_macro_f1": 0.5,
+        "eval_precision": 0.5,
+        "eval_recall": 0.5,
+        "eval_micro_f1": 0.5,
+        "eval_split": "validation",
         "eval_steps": 2.0,
         "train_labeled_count": 1,
         "pre_query_unlabeled_count": 9,
@@ -90,7 +98,9 @@ def test_log_tensorboard_metrics_writes_expected_scalars():
         ("train/loss", 2.5, 2),
         ("train/steps", 1.0, 2),
         ("eval/accuracy", 0.75, 2),
-        ("eval/macro_f1", 0.5, 2),
+        ("eval/precision", 0.5, 2),
+        ("eval/recall", 0.5, 2),
+        ("eval/micro_f1", 0.5, 2),
         ("eval/steps", 2.0, 2),
         ("pool/train_labeled_count", 1, 2),
         ("pool/pre_query_unlabeled_count", 9, 2),
@@ -108,7 +118,10 @@ def test_save_run_history_csv_writes_eval_metrics(tmp_path):
             "train_loss": 2.5,
             "train_steps": 10.0,
             "eval_accuracy": 0.75,
-            "eval_macro_f1": 0.5,
+            "eval_precision": 0.5,
+            "eval_recall": 0.5,
+            "eval_micro_f1": 0.5,
+            "eval_split": "validation",
             "eval_steps": 3.0,
             "train_labeled_count": 10,
             "pre_query_unlabeled_count": 790,
@@ -121,8 +134,8 @@ def test_save_run_history_csv_writes_eval_metrics(tmp_path):
     save_run_history_csv(output_path, run_history)
 
     assert output_path.read_text().splitlines() == [
-        "round,epochs,train_loss,train_steps,eval_accuracy,eval_macro_f1,eval_steps,train_labeled_count,pre_query_unlabeled_count,post_query_labeled_count,post_query_unlabeled_count,selected_indices",
-        '0,30,2.5,10.0,0.75,0.5,3.0,10,790,20,780,"1, 2, 3"',
+        "round,epochs,train_loss,train_steps,eval_accuracy,eval_precision,eval_recall,eval_micro_f1,eval_split,eval_steps,train_labeled_count,pre_query_unlabeled_count,post_query_labeled_count,post_query_unlabeled_count,selected_indices",
+        '0,30,2.5,10.0,0.75,0.5,0.5,0.5,validation,3.0,10,790,20,780,"1, 2, 3"',
     ]
 
 
@@ -148,3 +161,13 @@ def test_load_model_state_from_checkpoint_handles_missing_weights():
     model = torch.nn.Linear(2, 1)
 
     assert load_model_state_from_checkpoint(model, {}) is False
+
+
+def test_checkpoint_rejects_legacy_and_reordered_labels():
+    labels = ["O", "B-MENU.NM", "I-MENU.NM"]
+    for checkpoint in ({}, {"label_names": labels[::-1], "evaluation": "seqeval_entity_micro_bio"}):
+        with pytest.raises(ValueError, match="Start a new BIO run"):
+            validate_checkpoint_labels(checkpoint, labels)
+    validate_checkpoint_labels(
+        {"label_names": labels, "evaluation": "seqeval_entity_micro_bio"}, labels
+    )

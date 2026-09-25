@@ -6,12 +6,25 @@ from typing import Any
 
 import numpy as np
 import torch
-from sklearn.metrics import accuracy_score, f1_score
+from seqeval.metrics import accuracy_score, f1_score, precision_score, recall_score
 from torch.utils.data import DataLoader, Dataset, Subset
 
 
 IGNORE_INDEX = -100
 DEFAULT_IMAGE_SIZE = 224
+CORD_ENTITY_TYPES = (
+    "MENU.NM", "MENU.NUM", "MENU.UNITPRICE", "MENU.CNT", "MENU.DISCOUNTPRICE",
+    "MENU.PRICE", "MENU.ITEMSUBTOTAL", "MENU.VATYN", "MENU.ETC", "MENU.SUB_NM",
+    "MENU.SUB_UNITPRICE", "MENU.SUB_CNT", "MENU.SUB_PRICE", "MENU.SUB_ETC",
+    "VOID_MENU.NM", "VOID_MENU.PRICE", "SUB_TOTAL.SUBTOTAL_PRICE",
+    "SUB_TOTAL.DISCOUNT_PRICE", "SUB_TOTAL.SERVICE_PRICE", "SUB_TOTAL.OTHERSVC_PRICE",
+    "SUB_TOTAL.TAX_PRICE", "SUB_TOTAL.ETC", "TOTAL.TOTAL_PRICE", "TOTAL.TOTAL_ETC",
+    "TOTAL.CASHPRICE", "TOTAL.CHANGEPRICE", "TOTAL.CREDITCARDPRICE", "TOTAL.EMONEYPRICE",
+    "TOTAL.MENUTYPE_CNT", "TOTAL.MENUQTY_CNT",
+)
+CORD_LABEL_NAMES = ["O"] + [
+    f"{prefix}-{entity}" for prefix in ("B", "I") for entity in CORD_ENTITY_TYPES
+]
 
 
 @dataclass(frozen=True)
@@ -42,9 +55,11 @@ def load_cord_token_classification(
         raw_dataset = raw_dataset.select(range(min(limit, len(raw_dataset))))
 
     if label_names is None:
-        label_names = collect_cord_label_names(raw_dataset)
+        label_names = list(CORD_LABEL_NAMES)
     if label_to_id is None:
         label_to_id = {label: index for index, label in enumerate(label_names)}
+    if label_to_id != {label: index for index, label in enumerate(label_names)}:
+        raise ValueError("label_to_id must match the ordering of label_names.")
     return CordData(
         dataset=CordTokenClassificationDataset(
             raw_dataset,
@@ -71,12 +86,15 @@ def extract_cord_words_labels_boxes(sample: dict[str, Any]) -> list[tuple[str, s
     items: list[tuple[str, str, list[int]]] = []
 
     for line in parsed.get("valid_line", []):
-        label = line.get("category", "other")
+        category = line.get("category", "other").upper().replace("MENU.SUB.", "MENU.SUB_")
+        first_word = True
         for word in line.get("words", []):
             text = str(word.get("text", "")).strip()
             if not text:
                 continue
+            label = "O" if category == "OTHER" else f"{'B' if first_word else 'I'}-{category}"
             items.append((text, label, _word_bbox(word, width=width, height=height)))
+            first_word = False
 
     return items
 
@@ -104,7 +122,10 @@ class CordTokenClassificationDataset(Dataset):
         sample = self.raw_dataset[int(index)]
         words_labels_boxes = extract_cord_words_labels_boxes(sample)
         words = [item[0] for item in words_labels_boxes]
-        word_labels = [self.label_to_id.get(item[1], IGNORE_INDEX) for item in words_labels_boxes]
+        unknown_labels = {item[1] for item in words_labels_boxes} - self.label_to_id.keys()
+        if unknown_labels:
+            raise ValueError(f"Unknown CORD BIO labels: {sorted(unknown_labels)}")
+        word_labels = [self.label_to_id[item[1]] for item in words_labels_boxes]
         boxes = [item[2] for item in words_labels_boxes]
 
         encoded = self.tokenizer(
@@ -180,15 +201,20 @@ def evaluate_layoutlmv3_token_classifier(
     model: torch.nn.Module,
     dataset: Dataset,
     *,
+    label_names: list[str],
     batch_size: int = 1,
     device: str | torch.device = "cpu",
 ) -> dict[str, float]:
+    if not label_names or any(
+        label != "O" and not label.startswith(("B-", "I-")) for label in label_names
+    ):
+        raise ValueError("CORD evaluation requires BIO label names.")
     model.to(device)
     model.eval()
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
 
-    all_preds: list[int] = []
-    all_labels: list[int] = []
+    all_preds: list[list[str]] = []
+    all_labels: list[list[str]] = []
     steps = 0
 
     with torch.no_grad():
@@ -196,24 +222,28 @@ def evaluate_layoutlmv3_token_classifier(
             batch = _move_cord_batch(batch, device)
             labels = batch.pop("labels")
             outputs = model(**batch)
+            if outputs.logits.shape[-1] != len(label_names):
+                raise ValueError("Model output classes must match the BIO label names.")
             preds = outputs.logits.argmax(dim=-1)
-            valid_mask = labels.ne(IGNORE_INDEX)
-
-            all_preds.extend(preds[valid_mask].detach().cpu().tolist())
-            all_labels.extend(labels[valid_mask].detach().cpu().tolist())
+            for receipt_preds, receipt_labels in zip(preds, labels):
+                valid_mask = receipt_labels.ne(IGNORE_INDEX)
+                if valid_mask.any():
+                    all_preds.append([
+                        label_names[index] for index in receipt_preds[valid_mask].cpu().tolist()
+                    ])
+                    all_labels.append([
+                        label_names[index] for index in receipt_labels[valid_mask].cpu().tolist()
+                    ])
             steps += 1
 
     if not all_labels:
-        return {"eval_accuracy": 0.0, "eval_macro_f1": 0.0, "eval_steps": float(steps)}
+        raise ValueError("CORD evaluation contains no valid labeled tokens.")
 
     return {
         "eval_accuracy": accuracy_score(all_labels, all_preds),
-        "eval_macro_f1": f1_score(
-            all_labels,
-            all_preds,
-            average="macro",
-            zero_division=0,
-        ),
+        "eval_precision": precision_score(all_labels, all_preds, average="micro", zero_division=0),
+        "eval_recall": recall_score(all_labels, all_preds, average="micro", zero_division=0),
+        "eval_micro_f1": f1_score(all_labels, all_preds, average="micro", zero_division=0),
         "eval_steps": float(steps),
     }
 

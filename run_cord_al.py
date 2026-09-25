@@ -49,8 +49,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--model-name", default="microsoft/layoutlmv3-base")
     parser.add_argument("--eval-split", default="validation")
     parser.add_argument("--eval-limit", type=int, default=None)
-    parser.add_argument("--checkpoint-dir", default="checkpoints/cord")
-    parser.add_argument("--tensorboard-dir", default="runs/cord")
+    parser.add_argument("--checkpoint-dir", default="checkpoints/cord_bio")
+    parser.add_argument("--tensorboard-dir", default="runs/cord_bio")
     parser.add_argument("--results-csv", default=None)
     parser.add_argument("--resume", default=None)
     parser.add_argument(
@@ -82,12 +82,15 @@ def save_checkpoint(
     metrics,
     model_state_dict=None,
     run_history=None,
+    label_names=None,
 ):
     path.parent.mkdir(parents=True, exist_ok=True)
     labeled_indices = np.asarray(labeled_indices, dtype=np.int64).tolist()
     torch.save(
         {
-            "schema_version": 1,
+            "schema_version": 2,
+            "label_names": label_names,
+            "evaluation": "seqeval_entity_micro_bio",
             "round_index": round_index,
             "labeled_indices": labeled_indices,
             "args": vars(args),
@@ -101,6 +104,18 @@ def save_checkpoint(
 
 def load_checkpoint(path):
     return torch.load(path, map_location="cpu", weights_only=False)
+
+
+def validate_checkpoint_labels(checkpoint, label_names):
+    if (
+        checkpoint.get("label_names") != label_names
+        or checkpoint.get("evaluation") != "seqeval_entity_micro_bio"
+    ):
+        raise ValueError(
+            "Checkpoint uses an old or different CORD label/evaluation scheme. "
+            "Start a new BIO run with separate checkpoint, CSV and TensorBoard paths; "
+            "old category-only checkpoints cannot resume BIO training."
+        )
 
 
 def model_state_dict_to_cpu(model):
@@ -126,7 +141,10 @@ def save_run_history_csv(path, run_history):
         "train_loss",
         "train_steps",
         "eval_accuracy",
-        "eval_macro_f1",
+        "eval_precision",
+        "eval_recall",
+        "eval_micro_f1",
+        "eval_split",
         "eval_steps",
         "train_labeled_count",
         "pre_query_unlabeled_count",
@@ -149,7 +167,9 @@ def log_tensorboard_metrics(writer, metrics, round_index):
     writer.add_scalar("train/loss", metrics["train_loss"], round_index)
     writer.add_scalar("train/steps", metrics["train_steps"], round_index)
     writer.add_scalar("eval/accuracy", metrics["eval_accuracy"], round_index)
-    writer.add_scalar("eval/macro_f1", metrics["eval_macro_f1"], round_index)
+    writer.add_scalar("eval/precision", metrics["eval_precision"], round_index)
+    writer.add_scalar("eval/recall", metrics["eval_recall"], round_index)
+    writer.add_scalar("eval/micro_f1", metrics["eval_micro_f1"], round_index)
     writer.add_scalar("eval/steps", metrics["eval_steps"], round_index)
     writer.add_scalar("pool/train_labeled_count", metrics["train_labeled_count"], round_index)
     writer.add_scalar("pool/pre_query_unlabeled_count", metrics["pre_query_unlabeled_count"], round_index)
@@ -232,6 +252,7 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.resume:
         resume_checkpoint = load_checkpoint(Path(args.resume).expanduser().resolve())
+        validate_checkpoint_labels(resume_checkpoint, cord.label_names)
 
         initial_labeled = np.asarray(resume_checkpoint["labeled_indices"], dtype=np.int64)
         start_round = resume_checkpoint["round_index"] + 1
@@ -286,12 +307,15 @@ def main(argv: list[str] | None = None) -> None:
         eval_metrics = evaluate_layoutlmv3_token_classifier(
             model,
             eval_dataset,
+            label_names=cord.label_names,
             batch_size=args.batch_size,
             device=device,
         )
         print(f"Eval steps: {eval_metrics['eval_steps']:.0f}")
         print(f"Eval accuracy: {eval_metrics['eval_accuracy']:.4f}")
-        print(f"Eval macro F1: {eval_metrics['eval_macro_f1']:.4f}")
+        print(f"Eval entity precision: {eval_metrics['eval_precision']:.4f}")
+        print(f"Eval entity recall: {eval_metrics['eval_recall']:.4f}")
+        print(f"Eval entity micro F1 (seqeval): {eval_metrics['eval_micro_f1']:.4f}")
 
         train_labeled_count = len(query_engine.labeled_indices)
         pre_query_unlabeled_count = len(query_engine.unlabeled_indices)
@@ -324,7 +348,10 @@ def main(argv: list[str] | None = None) -> None:
                 "train_loss": train_metrics["train_loss"],
                 "train_steps": train_metrics["train_steps"],
                 "eval_accuracy": eval_metrics["eval_accuracy"],
-                "eval_macro_f1": eval_metrics["eval_macro_f1"],
+                "eval_precision": eval_metrics["eval_precision"],
+                "eval_recall": eval_metrics["eval_recall"],
+                "eval_micro_f1": eval_metrics["eval_micro_f1"],
+                "eval_split": args.eval_split,
                 "eval_steps": eval_metrics["eval_steps"],
                 "train_labeled_count": train_labeled_count,
                 "pre_query_unlabeled_count": pre_query_unlabeled_count,
@@ -347,6 +374,7 @@ def main(argv: list[str] | None = None) -> None:
                 args=args,
                 metrics=metrics,
                 run_history=run_history,
+                label_names=cord.label_names,
             )
 
         save_checkpoint(
@@ -357,6 +385,7 @@ def main(argv: list[str] | None = None) -> None:
             metrics=metrics,
             model_state_dict=model_state_dict_to_cpu(model),
             run_history=run_history,
+            label_names=cord.label_names,
             )
 
         print(f"Saved checkpoint: {checkpoint_path}")
@@ -393,7 +422,7 @@ def main(argv: list[str] | None = None) -> None:
             f"loss={record['train_loss']:.4f}, "
             f"epochs={record.get('epochs', 'n/a')}, "
             f"eval_accuracy={record.get('eval_accuracy', 0.0):.4f}, "
-            f"eval_macro_f1={record.get('eval_macro_f1', 0.0):.4f}, "
+            f"eval_micro_f1={record['eval_micro_f1']:.4f}, "
             f"train_labeled={train_labeled_count}, "
             f"post_query_labeled={post_query_labeled_count}, "
             f"post_query_unlabeled={post_query_unlabeled_count}, "

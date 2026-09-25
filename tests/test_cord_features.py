@@ -56,9 +56,63 @@ def test_layoutlmv3_token_evaluation_ignores_padding_labels():
     metrics = evaluate_layoutlmv3_token_classifier(
         TinyLayoutLMv3Model(),
         TinyCordDataset(),
+        label_names=["O", "B-TOTAL"],
         batch_size=2,
     )
 
     assert metrics["eval_accuracy"] == pytest.approx(0.25)
-    assert metrics["eval_macro_f1"] == pytest.approx(0.2)
+    assert metrics["eval_micro_f1"] == 0.0
     assert metrics["eval_steps"] == 1.0
+
+
+class SequenceDataset(Dataset):
+    def __init__(self, labels, predictions):
+        self.labels = labels
+        self.predictions = predictions
+
+    def __len__(self):
+        return len(self.labels)
+
+    def __getitem__(self, index):
+        return {
+            "input_ids": torch.tensor(self.predictions[index]),
+            "labels": torch.tensor(self.labels[index]),
+        }
+
+
+class SequenceModel(torch.nn.Module):
+    def forward(self, input_ids):
+        return SimpleNamespace(logits=torch.nn.functional.one_hot(input_ids, num_classes=3).float())
+
+
+def test_evaluation_scores_complete_entities_not_individual_tokens():
+    dataset = SequenceDataset([[1, 2, 0, 1, -100]], [[1, 1, 0, 1, 2]])
+    metrics = evaluate_layoutlmv3_token_classifier(
+        SequenceModel(), dataset, label_names=["O", "B-MENU.NM", "I-MENU.NM"]
+    )
+    assert metrics["eval_accuracy"] == pytest.approx(0.75)
+    assert metrics["eval_precision"] == pytest.approx(1 / 3)
+    assert metrics["eval_recall"] == pytest.approx(1 / 2)
+    assert metrics["eval_micro_f1"] == pytest.approx(0.4)
+
+
+def test_evaluation_preserves_receipt_boundaries_and_seqeval_default_mode():
+    dataset = SequenceDataset([[1, 2], [2, 2]], [[2, 2], [0, 0]])
+    metrics = evaluate_layoutlmv3_token_classifier(
+        SequenceModel(), dataset, label_names=["O", "B-MENU.NM", "I-MENU.NM"], batch_size=2
+    )
+    assert metrics["eval_precision"] == 1.0
+    assert metrics["eval_recall"] == 0.5
+    assert metrics["eval_micro_f1"] == pytest.approx(2 / 3)
+
+
+def test_evaluation_rejects_empty_references_and_non_bio_labels():
+    with pytest.raises(ValueError, match="no valid labeled tokens"):
+        evaluate_layoutlmv3_token_classifier(
+            SequenceModel(), SequenceDataset([[-100]], [[0]]),
+            label_names=["O", "B-MENU.NM", "I-MENU.NM"],
+        )
+    with pytest.raises(ValueError, match="BIO"):
+        evaluate_layoutlmv3_token_classifier(
+            SequenceModel(), TinyCordDataset(), label_names=["menu.nm"]
+        )

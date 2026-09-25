@@ -1,11 +1,15 @@
 import json
 
 import torch
+import pytest
 from PIL import Image
 
 from alqueries.huggingface.cord import (
     CordTokenClassificationDataset,
     DEFAULT_IMAGE_SIZE,
+    CORD_LABEL_NAMES,
+    extract_cord_words_labels_boxes,
+    _align_word_labels,
 )
 
 
@@ -100,7 +104,7 @@ def test_cord_preprocessing_outputs_matching_sequence_lengths():
     dataset = CordTokenClassificationDataset(
         [_raw_cord_sample()],
         tokenizer=FakeTokenizer(),
-        label_to_id={"menu": 0, "total": 1},
+        label_to_id={"B-MENU": 0, "B-TOTAL": 1},
         max_length=5,
     )
 
@@ -123,7 +127,7 @@ def test_cord_preprocessing_uses_real_image_processor_when_available():
         [_raw_cord_sample()],
         tokenizer=FakeTokenizer(),
         image_processor=image_processor,
-        label_to_id={"menu": 0, "total": 1},
+        label_to_id={"B-MENU": 0, "B-TOTAL": 1},
         max_length=5,
     )
 
@@ -131,3 +135,28 @@ def test_cord_preprocessing_uses_real_image_processor_when_available():
 
     assert image_processor.seen_modes == ["RGB"]
     assert torch.all(item["pixel_values"] == 0.5)
+
+
+def test_cord_bio_boundaries_other_and_v2_category_aliases():
+    sample = {"ground_truth": json.dumps({"valid_line": [
+        {"category": "menu.nm", "words": [{"text": " "}, {"text": "Hot"}, {"text": "Coffee"}]},
+        {"category": "menu.nm", "words": [{"text": "Tea"}]},
+        {"category": "other", "words": [{"text": "Thank"}, {"text": "you"}]},
+        {"category": "menu.sub.nm", "words": [{"text": "Extra"}, {"text": "milk"}]},
+    ]})}
+    labels = [label for _, label, _ in extract_cord_words_labels_boxes(sample)]
+    assert labels == ["B-MENU.NM", "I-MENU.NM", "B-MENU.NM", "O", "O", "B-MENU.SUB_NM", "I-MENU.SUB_NM"]
+    assert set(labels) <= set(CORD_LABEL_NAMES)
+    assert len(CORD_LABEL_NAMES) == len(set(CORD_LABEL_NAMES)) == 61
+
+
+def test_cord_unknown_labels_are_not_silently_ignored():
+    dataset = CordTokenClassificationDataset(
+        [_raw_cord_sample()], tokenizer=FakeTokenizer(), label_to_id={"O": 0}
+    )
+    with pytest.raises(ValueError, match="Unknown CORD BIO labels"):
+        dataset[0]
+
+
+def test_cord_subword_alignment_keeps_only_first_token():
+    assert _align_word_labels([None, 0, 0, 1, None], [1, 2]) == [-100, 1, -100, 2, -100]

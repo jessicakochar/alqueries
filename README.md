@@ -71,6 +71,29 @@ Check a first round before extending the run. Resume a compatible BIO run using
 `--resume checkpoints/cord_bio/latest.pt` with the same dataset, model and output paths.
 The runner validates checkpoint label names and the evaluation scheme.
 
+CORD writes `latest.pt` before training and after every completed epoch, using a
+temporary file followed by replacement. Epoch checkpoints contain model and
+optimizer state, random-number-generator state, loss totals, the labeled pool,
+and completed-round history. Resume continues the same round from the next epoch;
+an interrupted epoch is repeated. If training finished but evaluation/query did
+not, resume reruns evaluation/query without repeating training. CSV results are
+written after each completed round, so an epoch checkpoint can exist before the
+first CSV row.
+
+Each active-learning round starts from pretrained weights with a round-specific
+seed, both in uninterrupted runs and after a completed-round resume. Model and
+optimizer state are restored only when resuming inside a round. Keep training,
+dataset, and evaluation settings unchanged when resuming; the total round target
+may increase. Exact numeric reproducibility also depends on hardware and backend
+determinism. Older checkpoints cannot recover progress within an interrupted
+epoch or round. Only `latest.pt` includes the state needed for epoch resume;
+the numbered round files contain round summaries.
+
+CSV updates use temporary-file replacement and are rebuilt from checkpoint history
+on resume if a previous CSV write was interrupted. Token entropy runs skip unused
+hidden-state embeddings to reduce pool-extraction memory. A missing receipt image
+raises an error when the real image processor is enabled.
+
 This aligns the label scheme and metric, not the complete paper experiment.
 Our default per-round evaluation uses `validation`; the official example evaluates
 `test`. Keep test data held out for final reporting. Our preprocessing still uses

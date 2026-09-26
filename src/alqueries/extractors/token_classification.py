@@ -17,7 +17,7 @@ class TokenClassificationFeatureExtractor(FeatureExtractor):
     features for strategies that operate one score/vector per document.
     """
 
-    def extract(self, loader: DataLoader) -> dict[str, np.ndarray | torch.Tensor]:
+    def extract(self, loader: DataLoader, *, include_embeddings: bool = True) -> dict[str, np.ndarray | torch.Tensor]:
         self._model.to(self._device)
         self._model.eval()
 
@@ -36,41 +36,46 @@ class TokenClassificationFeatureExtractor(FeatureExtractor):
                     for key, value in batch.items()
                     if key != "labels"
                 }
-                outputs = self._model(**model_inputs, output_hidden_states=True)
+                outputs = self._model(**model_inputs, output_hidden_states=include_embeddings)
                 logits = outputs.logits.detach().cpu()
-                token_embeddings = outputs.hidden_states[-1].detach().cpu()
-                token_embeddings = token_embeddings[:, : labels.shape[1], :]
+                if include_embeddings:
+                    token_embeddings = outputs.hidden_states[-1].detach().cpu()
+                    token_embeddings = token_embeddings[:, : labels.shape[1], :]
                 valid_token_mask = labels.ne(-100)
                 token_probs = F.softmax(logits, dim=-1)
 
                 token_logits_chunks.append(logits)
-                token_embeddings_chunks.append(token_embeddings)
+                if include_embeddings:
+                    token_embeddings_chunks.append(token_embeddings)
                 valid_token_mask_chunks.append(valid_token_mask)
 
                 for row_index in range(token_probs.shape[0]):
                     row_mask = valid_token_mask[row_index]
                     row_probs = token_probs[row_index][row_mask]
-                    row_embeddings = token_embeddings[row_index][row_mask]
 
                     if row_probs.numel() == 0:
                         row_probs = token_probs[row_index, :1]
-                        row_embeddings = token_embeddings[row_index, :1]
 
                     document_probs.append(row_probs.mean(dim=0))
-                    document_embeddings.append(row_embeddings.mean(dim=0))
+                    if include_embeddings:
+                        row_embeddings = token_embeddings[row_index][row_mask]
+                        if row_embeddings.numel() == 0:
+                            row_embeddings = token_embeddings[row_index, :1]
+                        document_embeddings.append(row_embeddings.mean(dim=0))
 
         token_logits = torch.cat(token_logits_chunks, dim=0)
-        token_embeddings = torch.cat(token_embeddings_chunks, dim=0)
         valid_token_mask = torch.cat(valid_token_mask_chunks, dim=0)
 
-        return {
+        features = {
             "token_logits": token_logits,
             "token_probs": F.softmax(token_logits, dim=-1),
-            "token_embeddings": token_embeddings,
             "valid_token_mask": valid_token_mask,
             "probs": torch.stack(document_probs, dim=0),
-            "embeddings": torch.stack(document_embeddings, dim=0).numpy(),
         }
+        if include_embeddings:
+            features["token_embeddings"] = torch.cat(token_embeddings_chunks, dim=0)
+            features["embeddings"] = torch.stack(document_embeddings, dim=0).numpy()
+        return features
 
 
 def _move_token_batch(

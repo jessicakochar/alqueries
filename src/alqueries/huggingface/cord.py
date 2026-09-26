@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import random
 from dataclasses import dataclass
 from typing import Any
 
@@ -169,9 +170,13 @@ def train_layoutlmv3_token_classifier(
     lr: float = 5e-5,
     device: str | torch.device = "cpu",
     one_batch: bool = True,
+    resume_state: dict | None = None,
+    checkpoint_callback: Any | None = None,
 ) -> dict[str, float]:
     model.to(device)
     model.train()
+    if epochs <= 0 or batch_size <= 0 or len(labeled_indices) == 0:
+        raise ValueError("Training requires positive epochs, batch size, and a nonempty labeled pool.")
     loader = DataLoader(
         Subset(dataset, labeled_indices.tolist()),
         batch_size=batch_size,
@@ -180,8 +185,38 @@ def train_layoutlmv3_token_classifier(
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
     total_loss = 0.0
     steps = 0
+    start_epoch = 0
+    if resume_state is not None:
+        optimizer.load_state_dict(resume_state["optimizer_state_dict"])
+        start_epoch = resume_state["completed_epochs"]
+        if not 0 <= start_epoch <= epochs:
+            raise ValueError("Checkpoint completed_epochs must be between zero and epochs.")
+        total_loss = resume_state["total_loss"]
+        steps = resume_state["steps"]
+        random.setstate(resume_state["python_rng"])
+        np.random.set_state(resume_state["numpy_rng"])
+        torch.set_rng_state(resume_state["torch_rng"].cpu())
+        if torch.device(device).type == "cuda" and resume_state["cuda_rng"]:
+            torch.cuda.set_rng_state_all(resume_state["cuda_rng"])
 
-    for _epoch in range(epochs):
+    def save_progress(completed_epochs):
+        if checkpoint_callback is not None:
+            checkpoint_callback({
+                "completed_epochs": completed_epochs,
+                "optimizer_state_dict": optimizer.state_dict(),
+                "total_loss": total_loss,
+                "steps": steps,
+                "python_rng": random.getstate(),
+                "numpy_rng": np.random.get_state(),
+                "torch_rng": torch.get_rng_state(),
+                "cuda_rng": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else [],
+            })
+
+    if resume_state is None:
+        save_progress(0)
+
+    for epoch in range(start_epoch, epochs):
+        print(f"[Train] Epoch {epoch + 1}/{epochs} started | batches={len(loader)}", flush=True)
         for batch in loader:
             batch = _move_cord_batch(batch, device)
             optimizer.zero_grad(set_to_none=True)
@@ -193,6 +228,8 @@ def train_layoutlmv3_token_classifier(
             steps += 1
             if one_batch:
                 break
+        save_progress(epoch + 1)
+        print(f"[Train] Epoch {epoch + 1}/{epochs} complete | cumulative loss={total_loss / max(steps, 1):.4f}", flush=True)
 
     return {"train_loss": total_loss / max(steps, 1), "train_steps": float(steps)}
 
@@ -322,12 +359,7 @@ def _pixel_values(sample: dict[str, Any], image_processor: Any | None) -> torch.
 
     image = sample.get("image")
     if image is None:
-        return torch.zeros(
-            3,
-            DEFAULT_IMAGE_SIZE,
-            DEFAULT_IMAGE_SIZE,
-            dtype=torch.float32,
-        )
+        raise ValueError("CORD receipt image is missing; multimodal training requires real images.")
 
     if hasattr(image, "convert"):
         image = image.convert("RGB")

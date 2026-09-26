@@ -160,3 +160,9 @@ def test_cord_unknown_labels_are_not_silently_ignored():
 
 def test_cord_subword_alignment_keeps_only_first_token():
     assert _align_word_labels([None, 0, 0, 1, None], [1, 2]) == [-100, 1, -100, 2, -100]
+
+
+def test_missing_real_image_is_rejected():
+    from alqueries.huggingface.cord import _pixel_values
+    with pytest.raises(ValueError, match="image is missing"):
+        _pixel_values({}, FakeImageProcessor())

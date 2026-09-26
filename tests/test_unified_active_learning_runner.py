@@ -34,6 +34,12 @@ def test_unified_runner_forwards_help_to_selected_dataset():
     assert runner_args == ["--help"]
 
 
+def test_unified_runner_forwards_help_after_separator():
+    args, runner_args = run_active_learning.parse_args(["--dataset", "cord", "--", "--help"])
+    assert args.dataset == "cord"
+    assert runner_args == ["--help"]
+
+
 def test_unified_runner_dispatches_to_selected_runner(monkeypatch):
     calls = []
 

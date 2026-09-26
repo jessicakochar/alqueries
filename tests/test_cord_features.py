@@ -52,6 +52,21 @@ def test_layoutlmv3_token_features_skip_labels_and_return_document_uncertainty()
     assert features["valid_token_mask"].shape == (2, 3)
 
 
+def test_entropy_features_do_not_require_hidden_states():
+    class LogitsOnlyModel(TinyLayoutLMv3Model):
+        def forward(self, **kwargs):
+            assert kwargs["output_hidden_states"] is False
+            return SimpleNamespace(logits=super().forward(**kwargs).logits)
+
+    loader = DataLoader(TinyCordDataset(), batch_size=2)
+    expected = TokenClassificationFeatureExtractor(TinyLayoutLMv3Model()).extract(loader)
+    actual = TokenClassificationFeatureExtractor(LogitsOnlyModel()).extract(loader, include_embeddings=False)
+    assert "embeddings" not in actual
+    assert "token_embeddings" not in actual
+    assert torch.equal(actual["token_probs"], expected["token_probs"])
+    assert torch.equal(actual["valid_token_mask"], expected["valid_token_mask"])
+
+
 def test_layoutlmv3_token_evaluation_ignores_padding_labels():
     metrics = evaluate_layoutlmv3_token_classifier(
         TinyLayoutLMv3Model(),

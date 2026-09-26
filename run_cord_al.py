@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import random
 import sys
 from pathlib import Path
 
@@ -63,7 +64,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Train one batch per epoch for quick debugging only.",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    for name in ("initial_size", "query_size", "rounds", "epochs", "batch_size", "max_length", "lr", "limit", "eval_limit"):
+        value = getattr(args, name)
+        if value is not None and value <= 0:
+            parser.error(f"--{name.replace('_', '-')} must be greater than zero.")
+    return args
 
 
 def print_selected_receipts(dataset, selected_indices: np.ndarray, max_print: int = 3) -> None:
@@ -83,12 +89,17 @@ def save_checkpoint(
     model_state_dict=None,
     run_history=None,
     label_names=None,
+    phase="round_complete",
+    training_state=None,
 ):
     path.parent.mkdir(parents=True, exist_ok=True)
     labeled_indices = np.asarray(labeled_indices, dtype=np.int64).tolist()
+    temporary_path = path.with_suffix(path.suffix + ".tmp")
     torch.save(
         {
-            "schema_version": 2,
+            "schema_version": 3,
+            "phase": phase,
+            "training_state": training_state,
             "label_names": label_names,
             "evaluation": "seqeval_entity_micro_bio",
             "round_index": round_index,
@@ -98,8 +109,9 @@ def save_checkpoint(
             "model_state_dict": model_state_dict,
             "run_history": run_history or [],
         },
-        path,
+        temporary_path,
     )
+    temporary_path.replace(path)
 
 
 def load_checkpoint(path):
@@ -152,7 +164,8 @@ def save_run_history_csv(path, run_history):
         "post_query_unlabeled_count",
         "selected_indices",
     ]
-    with path.open("w", newline="") as file:
+    temporary_path = path.with_suffix(path.suffix + ".tmp")
+    with temporary_path.open("w", newline="") as file:
         writer = csv.DictWriter(file, fieldnames=fieldnames)
         writer.writeheader()
         for record in run_history:
@@ -161,6 +174,7 @@ def save_run_history_csv(path, run_history):
                 str(index) for index in record.get("selected_indices", [])
             )
             writer.writerow(row)
+    temporary_path.replace(path)
 
 
 def log_tensorboard_metrics(writer, metrics, round_index):
@@ -255,9 +269,15 @@ def main(argv: list[str] | None = None) -> None:
         validate_checkpoint_labels(resume_checkpoint, cord.label_names)
 
         initial_labeled = np.asarray(resume_checkpoint["labeled_indices"], dtype=np.int64)
-        start_round = resume_checkpoint["round_index"] + 1
+        start_round = resume_checkpoint["round_index"]
+        if resume_checkpoint.get("phase", "round_complete") == "round_complete":
+            start_round += 1
+        for key in ("strategy", "limit", "initial_size", "query_size", "epochs", "batch_size", "lr", "seed", "max_length", "model_name", "eval_split", "eval_limit", "one_batch_smoke_test"):
+            if resume_checkpoint["args"].get(key) != getattr(args, key):
+                raise ValueError(f"Resume setting {key} differs from checkpoint; use the original settings.")
 
         print(f"Resumed from checkpoint: {args.resume}")
+        print(f"Resume round index: {start_round}; completed epochs: {(resume_checkpoint.get('training_state') or {}).get('completed_epochs', 0)}")
 
     else:
         rng = np.random.default_rng(args.seed)
@@ -269,9 +289,16 @@ def main(argv: list[str] | None = None) -> None:
         )
     query_engine = QueryEngine(dataset, labeled_indices=initial_labeled)
     run_history = list(resume_checkpoint.get("run_history", [])) if resume_checkpoint else []
+    if resume_checkpoint is not None:
+        save_run_history_csv(results_csv, run_history)
     last_checkpoint_path = None
 
     for round_index in range(start_round, args.rounds):
+        random.seed(args.seed + round_index)
+        np.random.seed(args.seed + round_index)
+        torch.manual_seed(args.seed + round_index)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(args.seed + round_index)
         print("\n" + "=" * 80)
         print(f"CORD ACTIVE LEARNING ROUND {round_index}")
         print("=" * 80)
@@ -282,11 +309,27 @@ def main(argv: list[str] | None = None) -> None:
             model_name=args.model_name,
             cache_dir=cache_dir,
         )
-        if resume_checkpoint is not None and round_index == start_round:
-            if load_model_state_from_checkpoint(model, resume_checkpoint):
-                print("Loaded model weights from checkpoint.")
-            else:
-                print("Checkpoint has no model weights; starting model from pretrained weights.")
+        training_state = None
+        if resume_checkpoint is not None and round_index == start_round and resume_checkpoint.get("phase") == "training":
+            if not load_model_state_from_checkpoint(model, resume_checkpoint):
+                raise ValueError("Training checkpoint has no model weights.")
+            training_state = resume_checkpoint["training_state"]
+            print("Restored model; continuing from the last completed epoch.")
+
+        def checkpoint_epoch(state):
+            save_checkpoint(
+                checkpoint_dir / "latest.pt",
+                round_index=round_index,
+                labeled_indices=query_engine.labeled_indices,
+                args=args,
+                metrics={},
+                model_state_dict=model_state_dict_to_cpu(model),
+                run_history=run_history,
+                label_names=cord.label_names,
+                phase="training",
+                training_state=state,
+            )
+            print(f"Saved resume checkpoint: round={round_index}, completed epochs={state['completed_epochs']}/{args.epochs}", flush=True)
 
         train_metrics = train_layoutlmv3_token_classifier(
             model,
@@ -297,6 +340,8 @@ def main(argv: list[str] | None = None) -> None:
             lr=args.lr,
             device=device,
             one_batch=args.one_batch_smoke_test,
+            resume_state=training_state,
+            checkpoint_callback=checkpoint_epoch,
         )
         print(f"Labeled receipts: {len(query_engine.labeled_indices)}")
         print(f"Unlabeled receipts: {len(query_engine.unlabeled_indices)}")
@@ -333,7 +378,9 @@ def main(argv: list[str] | None = None) -> None:
                 model=model,
                 device=device,
             )
-            features = extractor.extract(feature_loader)
+            features = extractor.extract(
+                feature_loader, include_embeddings=args.strategy != "token_entropy_sampling"
+            )
             strategy = get_strategy(args.strategy)
             selected_indices = query_engine.query(
                 strategy,
@@ -343,6 +390,7 @@ def main(argv: list[str] | None = None) -> None:
             selected_indices = np.asarray(selected_indices, dtype=np.int64)
             print_selected_receipts(dataset, selected_indices)
             query_engine.add_labeled_indices(selected_indices)
+            del features, extractor
         metrics = {
                 "epochs": args.epochs,
                 "train_loss": train_metrics["train_loss"],
@@ -364,7 +412,6 @@ def main(argv: list[str] | None = None) -> None:
             **metrics,
         })
         log_tensorboard_metrics(writer, metrics, round_index)
-        save_run_history_csv(results_csv, run_history)
 
         checkpoint_path = checkpoint_dir / f"round_{round_index}.pt"
         save_checkpoint(
@@ -387,10 +434,14 @@ def main(argv: list[str] | None = None) -> None:
             run_history=run_history,
             label_names=cord.label_names,
             )
+        save_run_history_csv(results_csv, run_history)
+        writer.flush()
 
         print(f"Saved checkpoint: {checkpoint_path}")
         print(f"Saved results CSV: {results_csv}")
         last_checkpoint_path = checkpoint_path
+        resume_checkpoint = None
+        del model, checkpoint_epoch
         if pre_query_unlabeled_count == 0:
             break
 

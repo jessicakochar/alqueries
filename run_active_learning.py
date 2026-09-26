@@ -29,6 +29,8 @@ def parse_args(argv: list[str] | None = None) -> tuple[argparse.Namespace, list[
     )
 
     args, runner_args = parser.parse_known_args(argv)
+    if runner_args[:1] == ["--"]:
+        runner_args = runner_args[1:]
     if args.help and args.dataset is None:
         parser.print_help()
         raise SystemExit(0)

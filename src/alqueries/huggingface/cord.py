@@ -10,6 +10,8 @@ import torch
 from seqeval.metrics import accuracy_score, f1_score, precision_score, recall_score
 from torch.utils.data import DataLoader, Dataset, Subset
 
+from alqueries.devices import get_device_rng_state, set_device_rng_state
+
 
 IGNORE_INDEX = -100
 DEFAULT_IMAGE_SIZE = 224
@@ -188,6 +190,7 @@ def train_layoutlmv3_token_classifier(
     start_epoch = 0
     if resume_state is not None:
         optimizer.load_state_dict(resume_state["optimizer_state_dict"])
+        _move_optimizer_state(optimizer, device)
         start_epoch = resume_state["completed_epochs"]
         if not 0 <= start_epoch <= epochs:
             raise ValueError("Checkpoint completed_epochs must be between zero and epochs.")
@@ -196,8 +199,7 @@ def train_layoutlmv3_token_classifier(
         random.setstate(resume_state["python_rng"])
         np.random.set_state(resume_state["numpy_rng"])
         torch.set_rng_state(resume_state["torch_rng"].cpu())
-        if torch.device(device).type == "cuda" and resume_state["cuda_rng"]:
-            torch.cuda.set_rng_state_all(resume_state["cuda_rng"])
+        set_device_rng_state(device, resume_state)
 
     def save_progress(completed_epochs):
         if checkpoint_callback is not None:
@@ -209,7 +211,7 @@ def train_layoutlmv3_token_classifier(
                 "python_rng": random.getstate(),
                 "numpy_rng": np.random.get_state(),
                 "torch_rng": torch.get_rng_state(),
-                "cuda_rng": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else [],
+                **get_device_rng_state(device),
             })
 
     if resume_state is None:
@@ -377,3 +379,12 @@ def _move_cord_batch(batch: dict[str, torch.Tensor], device: str | torch.device)
         for key, value in batch.items()
         if key != "sample_index"
     }
+
+
+def _move_optimizer_state(
+    optimizer: torch.optim.Optimizer, device: str | torch.device
+) -> None:
+    for state in optimizer.state.values():
+        for key, value in state.items():
+            if torch.is_tensor(value):
+                state[key] = value.to(device)

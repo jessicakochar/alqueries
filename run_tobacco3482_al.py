@@ -16,6 +16,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from alqueries import QueryEngine, get_strategy
+from alqueries.devices import get_default_device, seed_device
 from alqueries.extractors import HuggingFaceClassificationFeatureExtractor
 from alqueries.huggingface import (
     TextClassificationDataset,
@@ -70,10 +71,9 @@ def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(args.seed)
+    device = get_default_device()
+    seed_device(args.seed, device)
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Device: {device}")
     print(f"Strategy: {args.strategy}")
 

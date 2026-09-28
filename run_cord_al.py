@@ -18,6 +18,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from alqueries import QueryEngine, get_strategy
+from alqueries.devices import get_default_device, seed_device
 from alqueries.extractors import TokenClassificationFeatureExtractor
 from alqueries.huggingface import (
     create_layoutlmv3_token_classifier,
@@ -194,10 +195,9 @@ def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(args.seed)
+    device = get_default_device()
+    seed_device(args.seed, device)
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Device: {device}")
     print(f"Strategy: {args.strategy}")
     print("Images: enabled; using real CORD receipt pixel_values.")
@@ -297,8 +297,7 @@ def main(argv: list[str] | None = None) -> None:
         random.seed(args.seed + round_index)
         np.random.seed(args.seed + round_index)
         torch.manual_seed(args.seed + round_index)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(args.seed + round_index)
+        seed_device(args.seed + round_index, device)
         print("\n" + "=" * 80)
         print(f"CORD ACTIVE LEARNING ROUND {round_index}")
         print("=" * 80)
@@ -457,6 +456,8 @@ def main(argv: list[str] | None = None) -> None:
     print(f"Epochs per round: {args.epochs}")
     if last_checkpoint_path is not None:
         print(f"Last checkpoint: {last_checkpoint_path}")
+    print(f"Latest resume checkpoint: {checkpoint_dir / 'latest.pt'}")
+    print(f"Results CSV: {results_csv}")
 
     for record in run_history:
         train_labeled_count = record.get("train_labeled_count", record.get("labeled_count"))
